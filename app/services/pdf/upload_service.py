@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+from redis.exceptions import RedisError
+from sqlalchemy.orm import Session
+
+from app.config import MAX_UPLOAD_SIZE_BYTES, PAPER_PARSE_QUEUE_NAME
+from app.models import Paper, PaperStatus
+from app.queue.redis_queue import RedisQueue
+from app.services.storage import StorageService
+from app.services.pdf.locks import ChartOnlyRunAlreadyActive, chart_only_run_lock
+from app.services.pdf.pipeline import prepare_chart_only_run_for_paper, run_chart_only_for_paper
+from app.models.job import PendingJob
+from app.services.pdf.validation import PdfValidationError, validate_pdf_file
+
+
+class PaperUploadService:
+    def __init__(self, db: Session, storage: StorageService | None = None) -> None:
+        self.db = db
+        self.storage = storage or StorageService()
+
+    def create_from_upload(self, *, filename: str, content: bytes, title: str | None = None) -> Paper:
+        if len(content) > MAX_UPLOAD_SIZE_BYTES:
+            raise ValueError(f"File is too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES} bytes.")
+        if not content:
+            raise ValueError("File is empty.")
+        if not content.startswith(b"%PDF-"):
+            raise ValueError("Only PDF files are supported in the slim extraction service.")
+
+        safe_name = self.storage.safe_filename(filename)
+        file_hash = hashlib.sha256(content).hexdigest()
+
+        _validate_pdf_content_sync(content, safe_name)
+        existing = (
+            self.db.query(Paper)
+            .filter(Paper.file_hash == file_hash, Paper.status != PaperStatus.DELETED)
+            .first()
+        )
+        if existing is not None:
+            if existing.status == PaperStatus.FAILED:
+                destination = self.storage.paper_dir(existing.id) / safe_name
+                destination.write_bytes(content)
+                existing.title = title or existing.title or Path(safe_name).stem
+                existing.original_filename = safe_name
+                existing.file_path = self.storage.relative_path(destination)
+                existing.file_size = len(content)
+                existing.mime_type = "application/pdf"
+                self.enqueue_parse(existing, reset=True)
+                return existing
+            return existing
+
+        paper = Paper(
+            title=title or Path(safe_name).stem,
+            original_filename=safe_name,
+            file_path="pending",
+            file_size=len(content),
+            file_hash=file_hash,
+            status=PaperStatus.PENDING,
+        )
+        self.db.add(paper)
+        self.db.flush()
+
+        destination = self.storage.paper_dir(paper.id) / safe_name
+        destination.write_bytes(content)
+        paper.file_path = self.storage.relative_path(destination)
+        self.db.commit()
+        self.db.refresh(paper)
+        self._enqueue_or_parse_sync(paper)
+        return paper
+
+    def _enqueue_or_parse_sync(self, paper: Paper) -> None:
+        from app.services.pdf.parse_service import PaperParseService
+
+        self.db.add(PendingJob(paper_id=paper.id, task_type="paper_parse"))
+        self.db.commit()
+        try:
+            RedisQueue(PAPER_PARSE_QUEUE_NAME).enqueue({"task_type": "paper_parse", "paper_id": paper.id})
+        except RedisError:
+            self.db.refresh(paper)
+            PaperParseService(self.db, self.storage).parse_or_fail(paper.id)
+
+    def enqueue_parse(self, paper: Paper, *, reset: bool = False) -> Paper:
+        if paper.status == PaperStatus.DELETED:
+            raise ValueError("Deleted papers cannot be parsed.")
+        if paper.status in {PaperStatus.PENDING, PaperStatus.PROCESSING} and not reset:
+            return paper
+        if reset:
+            paper.status = PaperStatus.PENDING
+            paper.error_message = None
+            paper.text_content = None
+            paper.mineru_markdown = None
+            paper.mineru_artifact_dir = None
+            paper.mineru_extract_dir = None
+            paper.mineru_content_list_path = None
+            paper.page_count = None
+            from app.services.pdf.parse_service import _clear_parse_outputs
+            _clear_parse_outputs(self.db, paper)
+            self.db.commit()
+            self.db.refresh(paper)
+        self._enqueue_or_parse_sync(paper)
+        return paper
+
+    def enqueue_chart_only_run(self, paper: Paper) -> Paper:
+        if paper.status == PaperStatus.DELETED:
+            raise ValueError("Deleted papers cannot run chart-only extraction.")
+        if str(paper.status) == PaperStatus.PROCESSING.value:
+            return paper
+        if not paper.mineru_content_list_path:
+            raise ValueError("Paper has no MinerU content_list path.")
+        content_list = Path(paper.mineru_content_list_path)
+        if not content_list.is_file():
+            raise ValueError("MinerU content_list file not found.")
+        self.db.add(PendingJob(paper_id=paper.id, task_type="chart_only_run"))
+        self.db.flush()
+        queue = RedisQueue(PAPER_PARSE_QUEUE_NAME)
+        try:
+            queue.ping()
+            with chart_only_run_lock(paper.id, blocking=False):
+                prepare_chart_only_run_for_paper(paper)
+                queue.enqueue({
+                    "task_type": "chart_only_run",
+                    "paper_id": paper.id,
+                })
+                self.db.commit()
+            self.db.refresh(paper)
+            return paper
+        except RedisError:
+            with chart_only_run_lock(paper.id, blocking=False):
+                prepare_chart_only_run_for_paper(paper)
+                try:
+                    run_chart_only_for_paper(paper)
+                    paper.status = PaperStatus.DONE.value
+                    paper.error_message = None
+                    self.db.commit()
+                    self.db.refresh(paper)
+                    return paper
+                except Exception as exc:
+                    paper.status = PaperStatus.FAILED.value
+                    paper.error_message = f"chart-only extraction fallback failed: {exc}"
+                    self.db.commit()
+                    raise
+        except ChartOnlyRunAlreadyActive:
+            return paper
+
+
+def _validate_pdf_content_sync(content: bytes, filename: str) -> None:
+    import tempfile
+    path = Path(tempfile.gettempdir()) / f"__validate_{abs(hash(content))}_{filename}"
+    try:
+        path.write_bytes(content)
+        validate_pdf_file(str(path))
+    except PdfValidationError:
+        raise
+    except Exception:
+        pass
+    finally:
+        path.unlink(missing_ok=True)

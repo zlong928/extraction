@@ -1,0 +1,53 @@
+- main [ref=f3e3]:
+  - generic [ref=f3e4]:
+    - generic [ref=f3e5]:
+      - paragraph [ref=f3e6]: MinerU Workspace
+      - heading "Extraction" [level=1] [ref=f3e7]
+    - button "刷新" [ref=f3e8] [cursor=pointer]:
+      - img [ref=f3e9]
+  - generic [ref=f3e14]:
+    - generic [ref=f3e15] [cursor=pointer]:
+      - img [ref=f3e16]
+      - generic [ref=f3e19]: 选择 PDF
+    - textbox "标题，可留空" [ref=f3e20]
+    - button "上传并排队解析" [ref=f3e21] [cursor=pointer]:
+      - img [ref=f3e22]
+      - text: 上传并排队解析
+  - generic [ref=f3e25]:
+    - generic [ref=f3e26]:
+      - generic [ref=f3e27]:
+        - img [ref=f3e28]
+        - text: 已有 MinerU 产物
+      - generic [ref=f3e32]: 未发现本地 content_list
+    - combobox [disabled] [ref=f3e33]
+    - textbox "导入标题，可留空" [ref=f3e34]
+    - button "Chart-only 数据图提取" [disabled] [ref=f3e35]:
+      - img [ref=f3e36]
+      - text: Chart-only 数据图提取
+  - generic [ref=f3e40]:
+    - generic [ref=f3e41]:
+      - text: 论文
+      - strong [ref=f3e42]: "0"
+    - generic [ref=f3e43]:
+      - text: 已就绪
+      - strong [ref=f3e44]: "0"
+    - generic [ref=f3e45]:
+      - text: 处理中
+      - strong [ref=f3e46]: "0"
+    - generic [ref=f3e47]:
+      - text: 图片资产
+      - strong [ref=f3e48]: "0"
+  - generic [ref=f3e49]:
+    - complementary [ref=f3e50]:
+      - generic [ref=f3e51]:
+        - generic [ref=f3e52]:
+          - img [ref=f3e53]
+          - text: 论文
+        - generic [ref=f3e56]:
+          - button "取消全选" [disabled] [ref=f3e57]
+          - button "批量数据图提取" [disabled] [ref=f3e58]:
+            - img [ref=f3e59]
+            - text: 批量数据图提取
+      - generic [ref=f3e63]: 还没有论文
+    - generic [ref=f3e65]: 选择或上传一篇论文
+  - generic [ref=f3e66]: API same-origin proxy

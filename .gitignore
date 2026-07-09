@@ -1,0 +1,76 @@
+# Bytecode / Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging / build artifacts
+dist/
+build/
+*.egg-info/
+*.egg
+Pipfile.lock
+poetry.lock
+
+# Virtual envs
+.venv/
+.venv_new/
+venv/
+env/
+
+# Python tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyc.cache/
+
+# Test / coverage
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Environment config
+.env
+.env.*
+.env.backup*
+
+# uv / tooling
+.uv/
+.uv-cache/
+
+# Runtime data / generated outputs
+data/extraction.db
+data/extraction.db-journal
+data/uploads/
+data/results/
+data/runtime/
+data/pipeline_batch/
+data/pipeline_batch_summary.jsonl
+data/mineru_batch_summary.jsonl
+data/content_pipeline_results/
+data/**/*.tmp
+
+# Binary / media outputs
+pdf/*.pdf
+
+# Local testing / diagnostics
+tmp/
+tmp/**/*

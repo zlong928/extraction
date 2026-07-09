@@ -1,0 +1,15 @@
+{
+  "allowed_ordinal": ["low", "medium", "high", "sparse", "moderate", "dense", "weak", "strong", "uniform", "heterogeneous"],
+  "allowed_categorical": ["detected", "not_detected", "present", "absent", "visible", "not_visible", "positive", "negative"],
+  "allowed_trend": ["increased", "decreased", "similar", "higher", "lower", "stable", "maintained", "reduced", "enhanced"],
+  "value_type_priority": {
+    "exact_numeric": 4,
+    "approximate_numeric": 3,
+    "ordinal": 2,
+    "categorical": 2,
+    "qualitative_trend": 1
+  },
+  "axis_metadata_terms": ["x-axis", "y-axis", "scale bar", "image type"],
+  "long_text_banned_phrases": ["shown in", "schematic", "comparison of", "distribution of", "visualization of"],
+  "unit_patterns": ["%", "h", "min", "s", "mm", "um", "µm", "nm", "mg/L", "g/L", "mPa", "kPa", "MPa", "°C", "CFU", "mL"]
+}

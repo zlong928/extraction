@@ -1,0 +1,76 @@
+x-shared-env: &shared-env
+  DATA_DIR: /app/data
+  DATABASE_URL: sqlite:////app/data/extraction.db
+  REDIS_URL: redis://redis:6379/0
+  MINERU_API_KEY: ${MINERU_API_KEY:-}
+  MINERU_API_BASE_URL: ${MINERU_API_BASE_URL:-https://mineru.net}
+  MINERU_MODEL_VERSION: ${MINERU_MODEL_VERSION:-vlm}
+  MINERU_LANGUAGE: ${MINERU_LANGUAGE:-en}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-${LLM_BASE_URL:-https://api.openai.com/v1}}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-${LLM_API_KEY:-}}
+  OPENAI_MODEL: ${OPENAI_MODEL:-${LLM_MODEL:-gpt-4o-mini}}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_MODEL: ${LLM_MODEL:-}
+  LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
+  LLM_API_FORMAT: ${LLM_API_FORMAT:-openai_chat}
+  LLM_LORA_ID: ${LLM_LORA_ID:-}
+  LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-100}
+  LLM_MIN_REQUEST_INTERVAL_SECONDS: ${LLM_MIN_REQUEST_INTERVAL_SECONDS:-0}
+  LLM_ALLOW_NON_STREAM_FALLBACK: ${LLM_ALLOW_NON_STREAM_FALLBACK:-True}
+  LLM_ALLOW_ROOT_CHAT_FALLBACK: ${LLM_ALLOW_ROOT_CHAT_FALLBACK:-False}
+  IMAGE_EXTRACTION_WORKER_CONCURRENCY: ${IMAGE_EXTRACTION_WORKER_CONCURRENCY:-100}
+  VLM_BASE_URL: ${VLM_BASE_URL:-}
+  VLM_API_KEY: ${VLM_API_KEY:-}
+  VLM_MODEL: ${VLM_MODEL:-}
+  VLM_FALLBACK_MODELS: ${VLM_FALLBACK_MODELS:-${LLM_FALLBACK_MODELS:-}}
+  VLM_API_FORMAT: ${VLM_API_FORMAT:-}
+  VLM_LORA_ID: ${VLM_LORA_ID:-}
+  VLM_MAX_CONCURRENCY: ${VLM_MAX_CONCURRENCY:-${LLM_MAX_CONCURRENCY:-100}}
+  VLM_MIN_REQUEST_INTERVAL_SECONDS: ${VLM_MIN_REQUEST_INTERVAL_SECONDS:-${LLM_MIN_REQUEST_INTERVAL_SECONDS:-0}}
+  VLM_ALLOW_NON_STREAM_FALLBACK: ${VLM_ALLOW_NON_STREAM_FALLBACK:-True}
+  VLM_ALLOW_ROOT_CHAT_FALLBACK: ${VLM_ALLOW_ROOT_CHAT_FALLBACK:-False}
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      <<: *shared-env
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8001:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "-u", "-m", "app.worker"]
+    environment:
+      <<: *shared-env
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

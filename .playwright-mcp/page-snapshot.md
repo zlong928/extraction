@@ -1,0 +1,49 @@
+- main [ref=f1e3]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - paragraph [ref=f1e6]: MinerU Workspace
+      - heading "Extraction" [level=1] [ref=f1e7]
+    - button "刷新" [ref=f1e8] [cursor=pointer]:
+      - img [ref=f1e9]
+  - generic [ref=f1e14]:
+    - generic [ref=f1e15] [cursor=pointer]:
+      - img [ref=f1e16]
+      - generic [ref=f1e19]: 选择 PDF
+    - textbox "标题，可留空" [ref=f1e20]
+    - button "上传并排队解析" [ref=f1e21] [cursor=pointer]:
+      - img [ref=f1e22]
+      - text: 上传并排队解析
+  - generic [ref=f1e25]:
+    - generic [ref=f1e26]:
+      - generic [ref=f1e27]
+      - generic [ref=f1e32]: 6 个 content_list 可导入
+    - combobox [ref=f1e33]:
+      - option "001 2017 3D HA 3D printing of bacteria into functional complex materials / content_list_v2 / 39 images" [selected]
+      - option "002 2023 Highly Efficient Nitrogen Fixing Microbial Hydrogel Device / content_list_v2 / 31 images"
+      - option "003 2024 Living Porous Ceramics for Bacteria Regulated Gas Sensing and Carbon Capture / content_list_v2 / 29 images"
+      - option "004 2025 Dual carbon sequestration with photosynthetic living materials / content_list_v2 / 24 images"
+      - option "005 2025 Retrievable hydrogel networks with confined / content_list_v2 / 19 images"
+      - option "006 2026 Mesospace domain orchestrates microbial / content_list_v2 / 42 images"
+    - textbox "导入标题，可留空" [ref=f1e34]
+    - button "Chart-only 数据图提取" [ref=f1e35] [cursor=pointer]:
+      - img [ref=f1e36]
+      - text: Chart-only 数据图提取
+  - generic [ref=f1e40]:
+    - generic [ref=f1e41]:
+      - text: 论文
+      - strong [ref=f1e42]: "0"
+    - generic [ref=f1e43]:
+      - text: 已就绪
+      - strong [ref=f1e44]: "0"
+    - generic [ref=f1e45]:
+      - text: 处理中
+      - strong [ref=f1e46]: "0"
+    - generic [ref=f1e47]:
+      - text: 图片资产
+      - strong [ref=f1e48]: "0"
+  - generic [ref=f1e49]:
+    - complementary [ref=f1e50]:
+      - generic [ref=f1e51]
+      - generic [ref=f1e63]: 还没有论文
+    - generic [ref=f1e65]: 选择或上传一篇论文
+  - generic [ref=f1e66]: API same-origin proxy
