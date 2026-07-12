@@ -172,8 +172,18 @@ class S3StorageAdapter(StorageAdapter):
             raise ValueError("S3_BUCKET is required when STORAGE_BACKEND=s3")
         if client is None:
             import boto3
+            from botocore.config import Config
 
-            client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region)
+            client = boto3.client(
+                "s3",
+                endpoint_url=endpoint_url,
+                region_name=region,
+                config=Config(
+                    connect_timeout=float(os.getenv("S3_CONNECT_TIMEOUT_SECONDS", "3")),
+                    read_timeout=float(os.getenv("S3_READ_TIMEOUT_SECONDS", "10")),
+                    retries={"max_attempts": int(os.getenv("S3_MAX_ATTEMPTS", "2")), "mode": "standard"},
+                ),
+            )
         self.client = client
         self.bucket = bucket
         self.prefix = prefix.strip("/")

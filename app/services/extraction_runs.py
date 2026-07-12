@@ -2,26 +2,36 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import OPENAI_BASE_URL, OPENAI_MODEL, PIPELINE_VERSION, PROMPT_VERSION
 from app.models import ExtractionRun, Paper, PaperAsset, PendingJob, RunArtifact, StorageObject, StructuredResult
-from app.repositories import JobRepository
+from app.repositories import JobClaim, JobRepository
 from app.services.object_store import ObjectStore
-from app.services.storage import StorageAdapter
+from app.services.storage import StorageAdapter, StoredObjectInfo
 
 
 NORMALIZED_RESULT_SCHEMA_VERSION = "normalized-result.v1"
 
 
+@dataclass(frozen=True, slots=True)
+class StagedRunArtifact:
+    info: StoredObjectInfo
+    role: str
+    filename: str
+    metadata: dict[str, Any]
+    updates_latest_audit: bool = False
+
+
 def create_extraction_run(
     db: Session,
     *,
-    job: PendingJob,
+    job: PendingJob | JobClaim,
     paper: Paper,
     input_object: StorageObject,
     source_asset_id: int | None = None,
@@ -46,8 +56,15 @@ def create_extraction_run(
         config_snapshot=config_snapshot or {},
         status="running",
     )
-    db.add(run)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(run)
+            db.flush()
+    except IntegrityError:
+        existing = db.query(ExtractionRun).filter(ExtractionRun.task_id == job.id).one_or_none()
+        if existing is None:
+            raise
+        return existing
     return run
 
 
@@ -55,69 +72,130 @@ def finalize_extraction_run(
     db: Session,
     *,
     run: ExtractionRun,
-    job: PendingJob,
+    job: PendingJob | JobClaim,
     raw_responses: list[dict[str, Any]],
     result: Any,
     storage_adapter: StorageAdapter | None = None,
+    staged_raw_object: StoredObjectInfo | None = None,
+    staged_artifacts: list[StagedRunArtifact] | None = None,
 ) -> None:
-    JobRepository(db).assert_ownership(job, for_update=True)
-    raw_object = _persist_raw_responses(
+    store = ObjectStore(db, storage_adapter)
+    if staged_raw_object is None:
+        staged_raw_object = stage_raw_responses(
+            store,
+            run=run,
+            job=job,
+            raw_responses=raw_responses,
+        )
+    repository = JobRepository(db)
+    terminal_context = repository.lock_terminal_context(job)
+    if terminal_context.run is None or terminal_context.run.id != run.id:
+        raise ValueError(f"Job {job.id} does not own ExtractionRun {run.id}")
+    run = terminal_context.run
+    _persist_raw_responses(
         db,
         run=run,
-        raw_responses=raw_responses,
-        storage_adapter=storage_adapter,
+        store=store,
+        staged=staged_raw_object,
     )
-    run.raw_output_object_id = raw_object.id
+    for artifact in staged_artifacts or []:
+        stored = store.register(artifact.info, metadata=artifact.metadata)
+        db.add(
+            RunArtifact(
+                run_id=run.id,
+                object_id=stored.id,
+                role=artifact.role,
+                filename=artifact.filename,
+            )
+        )
+        if artifact.updates_latest_audit:
+            terminal_context.paper.latest_audit_object_id = stored.id
     _persist_normalized_results(db, run=run, result=result)
+    db.flush()
     run.normalized_schema_version = NORMALIZED_RESULT_SCHEMA_VERSION
     run.status = str(getattr(result, "status", "succeeded") or "succeeded")
     if run.status not in {"succeeded", "partial_failure"}:
         run.status = "failed"
     run.completed_at = datetime.now(timezone.utc)
     if run.status in {"succeeded", "partial_failure"}:
-        JobRepository(db).complete(job)
+        repository.complete_terminal(terminal_context)
     else:
         errors = getattr(result, "errors", []) or []
         message = json.dumps(errors, ensure_ascii=False, default=str)[:4000] or "extraction failed"
         run.error_message = message
-        JobRepository(db).fail(job, message)
+        repository.fail_terminal(terminal_context, message)
+    db.flush()
 
 
 def fail_extraction_run(
     db: Session,
     *,
     run: ExtractionRun,
-    job: PendingJob,
+    job: PendingJob | JobClaim,
     exc: Exception,
     raw_responses: list[dict[str, Any]] | None = None,
     storage_adapter: StorageAdapter | None = None,
+    staged_raw_object: StoredObjectInfo | None = None,
 ) -> None:
-    JobRepository(db).assert_ownership(job, for_update=True)
+    store = ObjectStore(db, storage_adapter)
+    if raw_responses is not None and run.raw_output_object_id is None and staged_raw_object is None:
+        staged_raw_object = stage_raw_responses(
+            store,
+            run=run,
+            job=job,
+            raw_responses=raw_responses,
+        )
+    repository = JobRepository(db)
+    terminal_context = repository.lock_terminal_context(job)
+    if terminal_context.run is None or terminal_context.run.id != run.id:
+        raise ValueError(f"Job {job.id} does not own ExtractionRun {run.id}")
+    run = terminal_context.run
     if raw_responses is not None and run.raw_output_object_id is None:
+        if staged_raw_object is None:
+            raise ValueError("Raw responses were supplied without staged object bytes")
         raw_object = _persist_raw_responses(
             db,
             run=run,
-            raw_responses=raw_responses,
-            storage_adapter=storage_adapter,
+            store=store,
+            staged=staged_raw_object,
         )
         run.raw_output_object_id = raw_object.id
+        db.flush()
     run.status = "failed"
     run.error_type = type(exc).__name__
     run.error_message = str(exc)
     run.completed_at = datetime.now(timezone.utc)
-    JobRepository(db).fail(job, str(exc))
+    terminal_context.paper.status = "failed"
+    terminal_context.paper.error_message = str(exc)
+    repository.fail_terminal(terminal_context, str(exc))
+    db.flush()
+
+
+def stage_raw_responses(
+    store: ObjectStore,
+    *,
+    run: ExtractionRun,
+    job: PendingJob | JobClaim,
+    raw_responses: list[dict[str, Any]],
+) -> StoredObjectInfo:
+    return store.stage_json(
+        run_id=run.id,
+        claim_generation=job.claim_generation,
+        role="model_raw_responses",
+        filename="model-raw-responses.json",
+        payload={"run_id": run.id, "responses": raw_responses},
+    )
 
 
 def _persist_raw_responses(
     db: Session,
     *,
     run: ExtractionRun,
-    raw_responses: list[dict[str, Any]],
-    storage_adapter: StorageAdapter | None,
+    store: ObjectStore,
+    staged: StoredObjectInfo,
 ) -> StorageObject:
-    raw_object = ObjectStore(db, storage_adapter).put_json(
-        key=f"runs/{run.id}/model-raw-responses.json",
-        payload={"run_id": run.id, "responses": raw_responses},
+    raw_object = store.register(
+        staged,
         metadata={"role": "model_raw_responses", "run_id": run.id},
     )
     run.raw_output_object_id = raw_object.id

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 
@@ -27,6 +28,8 @@ cli = typer.Typer(
     help="论文图片提取 CLI",
     no_args_is_help=True,
 )
+batch_cli = typer.Typer(name="batch", help="Durable batch PDF processing")
+cli.add_typer(batch_cli, name="batch")
 console = Console()
 
 _MARKDOWN_IMAGE_RE = MARKDOWN_IMAGE_RE
@@ -82,6 +85,148 @@ def _verbose_json(data: dict, label: str = "") -> None:
     if label:
         console.print(f"\n[bold]{label}[/bold]")
     console.print_json(data=data)
+
+
+_TERMINAL_BATCH_STATUSES = {"succeeded", "partial_failed", "failed", "cancelled"}
+
+
+def _batch_exit_code(status: str) -> int:
+    return 0 if status in {"succeeded", "cancelled"} else 1 if status in {"partial_failed", "failed"} else 0
+
+
+def _print_json_line(payload: dict[str, Any]) -> None:
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _print_batch_snapshot(snapshot: dict[str, Any], *, json_output: bool) -> None:
+    if json_output:
+        _print_json_line(snapshot)
+        return
+    table = Table(title=f"Batch {snapshot['id']} [{snapshot['status']}]")
+    table.add_column("State")
+    table.add_column("Count", justify="right")
+    for status, count in snapshot["counts"].items():
+        table.add_row(status, str(count))
+    table.add_row("total", str(snapshot["total"]))
+    console.print(table)
+
+
+def _follow_batch(batch_run_id: str, *, interval_seconds: float, json_output: bool) -> dict[str, Any]:
+    from app.db import SessionLocal
+    from app.services.batches import BatchOperationsService
+
+    try:
+        while True:
+            with SessionLocal() as db:
+                snapshot = BatchOperationsService(db).snapshot(batch_run_id)
+            _print_batch_snapshot(snapshot, json_output=json_output)
+            if snapshot["status"] in _TERMINAL_BATCH_STATUSES:
+                return snapshot
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        raise typer.Exit(130)
+
+
+@batch_cli.command("submit")
+def batch_submit(
+    source_root: Path = typer.Argument(..., exists=True, file_okay=False),
+    submission_key: str = typer.Option(..., "--submission-key"),
+    config: Path = typer.Option(..., "--config", exists=True, dir_okay=False),
+    project_id: int = typer.Option(1, "--project-id", min=1),
+    concurrency: int = typer.Option(1, "--concurrency", min=1),
+    limit: Optional[int] = typer.Option(None, "--limit", min=1),
+    follow: bool = typer.Option(False, "--follow"),
+    interval_seconds: float = typer.Option(2.0, "--interval", min=0.1),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Submit a deterministic folder manifest and return immediately unless --follow is set."""
+    from app.db import SessionLocal
+    from app.services.batches import BatchSubmissionService
+
+    try:
+        config_snapshot = json.loads(config.read_text(encoding="utf-8"))
+        if not isinstance(config_snapshot, dict):
+            raise ValueError("Batch config must be a JSON object")
+        with SessionLocal() as db:
+            batch = BatchSubmissionService(db).submit(
+                project_id=project_id,
+                source_root=source_root,
+                submission_key=submission_key,
+                batch_concurrency=concurrency,
+                config_snapshot=config_snapshot,
+                limit=limit,
+            )
+            batch_id = batch.id
+            status = batch.status
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if not follow:
+        if json_output:
+            _print_json_line({"batch_run_id": batch_id, "status": status})
+        else:
+            _always(batch_id)
+        raise typer.Exit(_batch_exit_code(status))
+    snapshot = _follow_batch(batch_id, interval_seconds=interval_seconds, json_output=json_output)
+    raise typer.Exit(_batch_exit_code(snapshot["status"]))
+
+
+@batch_cli.command("status")
+def batch_status(
+    batch_run_id: str,
+    follow: bool = typer.Option(False, "--follow"),
+    interval_seconds: float = typer.Option(2.0, "--interval", min=0.1),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show durable PostgreSQL progress, optionally until terminal."""
+    from app.db import SessionLocal
+    from app.services.batches import BatchOperationsService
+
+    if follow:
+        snapshot = _follow_batch(batch_run_id, interval_seconds=interval_seconds, json_output=json_output)
+    else:
+        with SessionLocal() as db:
+            snapshot = BatchOperationsService(db).snapshot(batch_run_id)
+        _print_batch_snapshot(snapshot, json_output=json_output)
+    raise typer.Exit(_batch_exit_code(snapshot["status"]))
+
+
+@batch_cli.command("retry")
+def batch_retry(batch_run_id: str, item_ids: list[str] = typer.Option(..., "--item-id")) -> None:
+    """Explicitly retry selected failed items and report newly scheduled Job IDs."""
+    from app.db import SessionLocal
+    from app.services.batches import BatchLifecycleService
+
+    try:
+        with SessionLocal() as db:
+            job_ids = BatchLifecycleService(db).retry_failed_items(batch_run_id, item_ids)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _print_json_line({"batch_run_id": batch_run_id, "job_ids": job_ids})
+
+
+@batch_cli.command("cancel")
+def batch_cancel(batch_run_id: str) -> None:
+    """Cancel work that has not started; processing work is not preempted."""
+    from app.db import SessionLocal
+    from app.services.batches import BatchLifecycleService
+
+    try:
+        with SessionLocal() as db:
+            batch = BatchLifecycleService(db).cancel(batch_run_id)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _print_json_line({"batch_run_id": batch.id, "status": batch.status})
+
+
+@batch_cli.command("export")
+def batch_export(batch_run_id: str, output_dir: Path = typer.Option(..., "--output-dir")) -> None:
+    """Rebuild manifest.json and events.jsonl from PostgreSQL facts."""
+    from app.db import SessionLocal
+    from app.services.batches import BatchOperationsService
+
+    with SessionLocal() as db:
+        manifest_path, events_path = BatchOperationsService(db).export(batch_run_id, output_dir)
+    _print_json_line({"manifest": str(manifest_path), "events": str(events_path)})
 
 
 def _build_cli_pipeline_client() -> Any | None:

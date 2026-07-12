@@ -64,6 +64,9 @@ S3_BUCKET=extraction
 S3_PREFIX=production
 S3_ENDPOINT_URL=https://s3.example.internal   # omit for AWS S3
 S3_REGION=us-east-1
+S3_CONNECT_TIMEOUT_SECONDS=3
+S3_READ_TIMEOUT_SECONDS=10
+S3_MAX_ATTEMPTS=2
 AWS_ACCESS_KEY_ID=…
 AWS_SECRET_ACCESS_KEY=…
 ```
@@ -72,7 +75,21 @@ Database rows store object IDs, keys, URIs, SHA-256, byte size and media type—
 
 ## Queue and extraction semantics
 
-Queue schema v2 contains only `schema_version`, `task_type` and `job_id`. A worker loads the paper, input object and configuration from PostgreSQL/object storage, claims the row with a renewable lease and monotonically increasing fencing generation, and creates exactly one `ExtractionRun` per task. Repeated submissions share an idempotency key; an explicit retry creates a new task/run and never overwrites a terminal run. Database triggers enforce terminal-run, result, object and published-delivery immutability even for bulk SQL that bypasses the ORM.
+Queue schema v2 contains only `schema_version`, `task_type` and `job_id`. A worker loads the paper, input object and configuration from PostgreSQL/object storage, then claims the row with a renewable lease and monotonically increasing fencing generation. A parse task creates at most one `ExtractionRun`, and only after parsing reaches extraction. Repeated submissions share an idempotency key; an explicit retry creates a new task/run and never overwrites a terminal run, while transport recovery keeps the same task/run. Database triggers enforce terminal-run, result, object and published-delivery immutability even for bulk SQL that bypasses the ORM.
+
+Run outputs are first written under immutable staging keys containing the claim generation and content hash. Only the worker that still owns that generation may register and link those objects while atomically finalizing Paper, Run, Job and any Batch facts. A crash before database registration therefore leaves an unreferenced object rather than blocking the next transport retry. V1 does not include an in-process staging garbage collector; production buckets must apply a lifecycle rule to stale `runs/*/staging/*` objects, with a retention period longer than the maximum job lease and recovery window.
+
+## Batch processing CLI
+
+Batch V1 uses PostgreSQL as its durable source of truth and Redis only as a wake-up queue. The repository `.env` is configured for the host-side CLI to use the same Docker PostgreSQL, Redis and MinIO services; SQLite remains only for isolated tests. Submit a deterministic folder manifest with a semantic configuration file:
+
+```bash
+uv run python scripts/cli.py batch submit ./incoming --submission-key run-001 --config batch-config.json --concurrency 3
+uv run python scripts/cli.py batch status <batch-id> --follow
+uv run python scripts/cli.py batch export <batch-id> --output-dir ./data/batches/<batch-id>
+```
+
+Use `batch retry --item-id <item-id>` for explicit failed-item retries and `batch cancel` to cancel work that has not started. Batch concurrency limits durable active Jobs; it is independent from worker-internal LLM concurrency and provider-global rate limits. V1 runs one worker process on one machine, does not preempt processing Jobs, and recovers jobs non-realtime after the prior worker process exits.
 
 Each completed run retains:
 

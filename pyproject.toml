@@ -37,7 +37,10 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["postgresql: requires TEST_POSTGRES_URL and a dedicated PostgreSQL database"]
+markers = [
+    "postgresql: requires TEST_POSTGRES_URL and a dedicated PostgreSQL database",
+    "redis: requires TEST_REDIS_URL and an isolated Redis database",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/**/*.py" = ["E402"]

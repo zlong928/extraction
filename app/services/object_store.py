@@ -41,7 +41,7 @@ class ObjectStore:
                 raise ValueError(f"Object key {key!r} already exists with different content")
             return existing
         info = self.adapter.put_bytes(key, data, media_type=media_type)
-        return self._record(info, metadata=metadata)
+        return self.register(info, metadata=metadata)
 
     def put_file(
         self,
@@ -60,13 +60,76 @@ class ObjectStore:
                 raise ValueError(f"Object key {key!r} already exists with different content")
             return existing
         info = self.adapter.put_file(key, path, media_type=media_type)
-        return self._record(info, metadata=metadata)
+        return self.register(info, metadata=metadata)
 
     def put_json(self, *, key: str, payload: Any, metadata: dict[str, Any] | None = None) -> StorageObject:
         data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
         return self.put_bytes(key=key, data=data, media_type="application/json", metadata=metadata)
 
-    def _record(self, info: StoredObjectInfo, *, metadata: dict[str, Any] | None) -> StorageObject:
+    def stage_bytes(
+        self,
+        *,
+        run_id: str,
+        claim_generation: int,
+        role: str,
+        filename: str,
+        data: bytes,
+        media_type: str,
+    ) -> StoredObjectInfo:
+        """Write immutable worker output without reading or mutating database state."""
+        digest = hashlib.sha256(data).hexdigest()
+        key = self._staging_key(
+            run_id=run_id,
+            claim_generation=claim_generation,
+            role=role,
+            digest=digest,
+            filename=filename,
+        )
+        return self.adapter.put_bytes(key, data, media_type=media_type)
+
+    def stage_file(
+        self,
+        *,
+        run_id: str,
+        claim_generation: int,
+        role: str,
+        filename: str,
+        source: str | Path,
+        media_type: str | None = None,
+    ) -> StoredObjectInfo:
+        """Write an immutable file under a lease-generation-specific staging key."""
+        path = Path(source)
+        digest, _ = file_digest(path)
+        key = self._staging_key(
+            run_id=run_id,
+            claim_generation=claim_generation,
+            role=role,
+            digest=digest,
+            filename=filename,
+        )
+        return self.adapter.put_file(key, path, media_type=media_type)
+
+    def stage_json(
+        self,
+        *,
+        run_id: str,
+        claim_generation: int,
+        role: str,
+        filename: str,
+        payload: Any,
+    ) -> StoredObjectInfo:
+        data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        return self.stage_bytes(
+            run_id=run_id,
+            claim_generation=claim_generation,
+            role=role,
+            filename=filename,
+            data=data,
+            media_type="application/json",
+        )
+
+    def register(self, info: StoredObjectInfo, *, metadata: dict[str, Any] | None = None) -> StorageObject:
+        """Register already-written bytes in the current database transaction."""
         existing = self.db.query(StorageObject).filter(StorageObject.object_key == info.key).one_or_none()
         if existing is not None:
             if existing.sha256 != info.sha256 or existing.size_bytes != info.size_bytes:
@@ -93,3 +156,18 @@ class ObjectStore:
                 raise ValueError(f"Object key {info.key!r} already exists with different content")
             return existing
         return record
+
+    @staticmethod
+    def _staging_key(
+        *,
+        run_id: str,
+        claim_generation: int,
+        role: str,
+        digest: str,
+        filename: str,
+    ) -> str:
+        safe_role = normalize_object_key(role).replace("/", "-")
+        safe_filename = normalize_object_key(filename)
+        return normalize_object_key(
+            f"runs/{run_id}/staging/{claim_generation}/{safe_role}/{digest}/{safe_filename}"
+        )

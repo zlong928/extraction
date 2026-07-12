@@ -20,6 +20,12 @@ class PendingJob(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     paper_id: Mapped[int] = mapped_column(ForeignKey("papers.id", ondelete="RESTRICT"), index=True, nullable=False)
+    batch_item_id: Mapped[str | None] = mapped_column(
+        ForeignKey("batch_items.id", ondelete="RESTRICT"), index=True
+    )
+    retry_of_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pending_jobs.id", ondelete="RESTRICT"), index=True
+    )
     task_type: Mapped[str] = mapped_column(String(40), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(
         String(255), default=lambda: f"legacy:{uuid4()}", nullable=False
@@ -41,3 +47,5 @@ class PendingJob(Base):
     )
 
     run = relationship("ExtractionRun", back_populates="task", uselist=False)
+    batch_item = relationship("BatchItem", back_populates="jobs")
+    retry_of_job = relationship("PendingJob", remote_side=[id], foreign_keys=[retry_of_job_id])

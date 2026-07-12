@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from redis.exceptions import RedisError
@@ -21,12 +22,36 @@ from app.models.job import PendingJob
 from app.services.pdf.validation import PdfValidationError, validate_pdf_file
 
 
+@dataclass(frozen=True)
+class PdfRegistration:
+    paper: Paper
+    created: bool
+    retryable_failed_paper: bool
+
+
 class PaperUploadService:
     def __init__(self, db: Session, storage: StorageService | None = None) -> None:
         self.db = db
         self.storage = storage or StorageService()
 
     def create_from_upload(self, *, filename: str, content: bytes, title: str | None = None) -> Paper:
+        registration = self.register_pdf(filename=filename, content=content, title=title)
+        if registration.retryable_failed_paper:
+            self.enqueue_parse(registration.paper, reset=True)
+        elif registration.created or registration.paper.status == PaperStatus.PENDING:
+            self._enqueue_or_parse_sync(registration.paper)
+        return registration.paper
+
+    def register_pdf(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        title: str | None = None,
+        project_id: int = 1,
+        commit: bool = True,
+    ) -> PdfRegistration:
+        """Validate and persist a PDF/Paper fact without creating a parse Job."""
         if len(content) > MAX_UPLOAD_SIZE_BYTES:
             raise ValueError(f"File is too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES} bytes.")
         if not content:
@@ -38,7 +63,6 @@ class PaperUploadService:
         file_hash = hashlib.sha256(content).hexdigest()
 
         _validate_pdf_content_sync(content, safe_name)
-        project_id = 1
         existing = (
             self.db.query(Paper)
             .filter(
@@ -62,9 +86,13 @@ class PaperUploadService:
                 existing.pdf_object_id = stored.id
                 existing.file_size = len(content)
                 existing.mime_type = "application/pdf"
-                self.enqueue_parse(existing, reset=True)
-                return existing
-            return existing
+                if commit:
+                    self.db.commit()
+                    self.db.refresh(existing)
+                else:
+                    self.db.flush()
+                return PdfRegistration(existing, created=False, retryable_failed_paper=True)
+            return PdfRegistration(existing, created=False, retryable_failed_paper=False)
 
         paper = Paper(
             project_id=project_id,
@@ -91,7 +119,7 @@ class PaperUploadService:
             )
             if winner is None:
                 raise
-            return winner
+            return PdfRegistration(winner, created=False, retryable_failed_paper=False)
 
         stored = ObjectStore(self.db, self.storage.adapter).put_bytes(
             key=f"papers/{paper.id}/source/{file_hash}.pdf",
@@ -101,26 +129,20 @@ class PaperUploadService:
         )
         paper.file_path = stored.object_key
         paper.pdf_object_id = stored.id
-        self.db.commit()
-        self.db.refresh(paper)
-        self._enqueue_or_parse_sync(paper)
-        return paper
+        if commit:
+            self.db.commit()
+            self.db.refresh(paper)
+        else:
+            self.db.flush()
+        return PdfRegistration(paper, created=True, retryable_failed_paper=False)
 
     def _enqueue_or_parse_sync(self, paper: Paper) -> None:
         from app.services.pdf.parse_service import PaperParseService
 
-        attempt = self.db.query(PendingJob).filter(
-            PendingJob.paper_id == paper.id, PendingJob.task_type == "paper_parse"
-        ).count() + 1
-        job, created = JobRepository(self.db).get_or_create(
-            paper_id=paper.id,
-            task_type="paper_parse",
-            idempotency_key=f"paper-parse:{paper.id}:{paper.file_hash}:attempt:{attempt}",
-            attempt=attempt,
-        )
+        job, created = JobRepository(self.db).admit_paper_parse(paper_id=paper.id)
         self.db.commit()
         try:
-            if created or job.status in {"pending", "redis_dispatched"}:
+            if created:
                 RedisQueue(PAPER_PARSE_QUEUE_NAME).enqueue(queue_payload("paper_parse", job.id))
         except RedisError:
             self.db.refresh(paper)

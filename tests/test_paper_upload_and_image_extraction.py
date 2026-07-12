@@ -5,13 +5,14 @@ import json
 import uuid
 import struct
 import zlib
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.db import SessionLocal
 from app.main import app
-from app.models import Figure, ImageExtraction, Panel, Paper, PaperAsset
+from app.models import Figure, ImageExtraction, Panel, Paper, PaperAsset, PendingJob
 from app.services.document_parser import ParsedDocument, ParsedElement, ParsedPage
 from app.services.mineru_parser import MinerUParseResult
 from app.services.mineru_asset_builder import MinerUAssetBuilder
@@ -70,6 +71,27 @@ def test_upload_queues_mineru_parse(monkeypatch) -> None:
     assert "paper_id" not in queued[-1]
 
 
+def test_duplicate_pending_upload_does_not_redispatch_active_job(monkeypatch) -> None:
+    queued: list[dict] = []
+    monkeypatch.setattr("app.queue.redis_queue.RedisQueue.enqueue", lambda self, payload: queued.append(payload))
+    content = _sample_pdf("duplicate-pending")
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/papers/upload",
+            files={"file": ("original.pdf", content, "application/pdf")},
+        )
+        second = client.post(
+            "/papers/upload",
+            files={"file": ("duplicate.pdf", content, "application/pdf")},
+        )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] == first.json()["id"]
+    assert len(queued) == 1
+
+
 def test_failed_duplicate_upload_requeues_same_paper(monkeypatch) -> None:
     queued: list[dict] = []
     monkeypatch.setattr("app.queue.redis_queue.RedisQueue.enqueue", lambda self, payload: queued.append(payload))
@@ -87,6 +109,9 @@ def test_failed_duplicate_upload_requeues_same_paper(monkeypatch) -> None:
     with SessionLocal() as db:
         paper = db.get(Paper, paper_id)
         assert paper is not None
+        first_job = db.query(PendingJob).filter(PendingJob.paper_id == paper_id).one()
+        first_job.status = "failed"
+        first_job.completed_at = datetime.now(timezone.utc)
         paper.status = "failed"
         paper.error_message = "MINERU_API_KEY is not configured."
         db.commit()
@@ -103,8 +128,9 @@ def test_failed_duplicate_upload_requeues_same_paper(monkeypatch) -> None:
         assert payload["status"] == "pending"
         assert payload["error_message"] is None
 
+    assert len(queued) == 2
     assert queued[-1]["task_type"] == "paper_parse"
-    assert queued[-1]["job_id"] > 0
+    assert queued[-1]["job_id"] != queued[0]["job_id"]
     assert "paper_id" not in queued[-1]
 
 
@@ -124,6 +150,9 @@ def test_retry_paper_parse_endpoint_resets_failed_paper(monkeypatch) -> None:
     with SessionLocal() as db:
         paper = db.get(Paper, paper_id)
         assert paper is not None
+        first_job = db.query(PendingJob).filter(PendingJob.paper_id == paper_id).one()
+        first_job.status = "failed"
+        first_job.completed_at = datetime.now(timezone.utc)
         paper.status = "failed"
         paper.error_message = "parse failed"
         db.commit()
@@ -134,9 +163,10 @@ def test_retry_paper_parse_endpoint_resets_failed_paper(monkeypatch) -> None:
         assert retried.json()["status"] == "pending"
         assert retried.json()["error_message"] is None
 
+    assert len(queued) == 2
     assert queued[-1]["schema_version"] == 2
     assert queued[-1]["task_type"] == "paper_parse"
-    assert queued[-1]["job_id"] > 0
+    assert queued[-1]["job_id"] != queued[0]["job_id"]
     assert "paper_id" not in queued[-1]
 
 

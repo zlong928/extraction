@@ -1,3 +1,4 @@
+from app.models.batch import BatchEvent, BatchItem, BatchRun
 from app.models.enums import ExtractionStatus, PaperStatus
 from app.models.figure import Figure, Panel
 from app.models.job import PendingJob
@@ -22,6 +23,9 @@ __all__ = [
     "Paper",
     "PaperAsset",
     "PendingJob",
+    "BatchRun",
+    "BatchItem",
+    "BatchEvent",
     "Project",
     "RunArtifact",
     "StorageObject",

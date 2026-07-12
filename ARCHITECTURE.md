@@ -1,6 +1,6 @@
 # Extraction Service 架构
 
-> 状态：生产持久化基线（2026-07-11）  
+> 状态：生产持久化与 Batch Processing U1-U5（2026-07-12）
 > 适用范围：本仓库的 FastAPI 后端、内容提取管线、React 前端、PostgreSQL、对象存储、Redis 异步任务与冻结交付。  
 > 目的：提供可检索的领域与包分层顶层地图，并用可复核评分持续追踪架构差距。本文描述当前实现，而非期望中的未来系统。
 
@@ -26,6 +26,7 @@
 - API 只负责请求、查询和入队；长耗时解析与内容提取由 worker 执行。
 - Redis 队列消息是轻量任务引用（schema v2：`task_type`、`job_id`），worker 从 PostgreSQL 和对象存储恢复上下文；Redis 不是事实源。
 - 每个任务最多对应一个不可变 `ExtractionRun`；显式重试创建新任务/新运行，终态运行不得更新或删除。worker lease 通过 heartbeat 续租，并以 `claim_generation` fencing 阻止旧 owner 提交。
+- Batch 提交以 `BatchRun`、确定性 `BatchItem` 与追加式 `BatchEvent` 保存审计事实；PDF 注册与 parse Job admission 分离，批处理注册不得直接入队。
 - DuckDB、Parquet、Excel、Markdown 和 manifest 是固定 `snapshot_at` 的不可变交付，不参与在线事务。
 - 内容管线以 `content_pipeline/contracts/` 的类型和校验规则为稳定边界；阶段间不得传递无约束字典替代已有契约。
 - 依赖和运行命令遵循仓库规则：`uv sync` 管理依赖，命令通过 `uv run` 执行，不使用系统 Python。
@@ -125,6 +126,7 @@ flowchart TB
 | 内容理解与结构化提取 | 规范化块、构图、选证据、分类面板、数字化图表、观察图片 | `DocumentGraph`、`EvidencePacket`、`ChartDigitizationResult`、`ImageObservation` | `content_pipeline/` | 纯管线能力；通过 contracts 输入输出，不直接依赖 Web/API 或 ORM |
 | 审计与结果发布 | 同时保留模型原始响应和规范化查询结果，质量门后生成审计/CSV | `ExtractionRun`、`StructuredResult`、对象化 audit/CSV | `content_pipeline/export/`、`app/services/extraction_runs.py`、`app/services/pdf/audit.py` | 原始响应不可替代规范化结果；终态运行不可覆盖 |
 | 任务编排与恢复 | 幂等入队、行锁 claim、lease heartbeat/fencing、失败/卡住任务恢复 | Redis `job_id`、`PendingJob`、advisory lock | `app/queue/`、`app/repositories/jobs.py`、`app/worker.py`、`dispatcher.py` | Redis 仅唤醒；数据库任务行与运行事实可恢复完整上下文 |
+| Batch 编排与结果复用 | 记录确定性清单、注册/复用、受窗口约束地派发与恢复 Job、取消/显式重试 | `BatchRun`、`BatchItem`、`BatchEvent`、result config hash、`PendingJob` lineage | `app/services/batches.py`、`app/repositories/batches.py`、`app/services/pdf/dispatcher.py` | BatchRun 行锁限定 durable active Job 窗口；Redis 只在数据库事实提交后接收 Job ID；同一 project/SHA 只复用 hash 相同且结果、工件齐全的成功 Run |
 | 数据交付 | 从固定范围和时间边界构建不可变分析包 | `DeliveryVersion`、DuckDB、Parquet、Excel、Markdown、manifest | `app/delivery/` | 在线库始终是 PostgreSQL；已发布版本不可原地修改 |
 | 工作台与结果浏览 | 上传/导入、选择论文、触发单篇或批量任务、轮询状态、浏览图与审计表 | React state、API DTO | `frontend/src/` | 只通过 HTTP 契约访问后端，不读取数据库或数据目录 |
 
@@ -168,6 +170,16 @@ classDiagram
         +task_type
         +paper_id
         +dispatch_state
+    }
+    class BatchRun {
+        +submission_key
+        +status
+        +result_config_hash
+    }
+    class BatchItem {
+        +ordinal
+        +source_sha256
+        +status
     }
     class ExtractionRun {
         +paper_id
@@ -232,6 +244,9 @@ classDiagram
     Figure "0..1" --> "0..*" PaperAsset : 关联图片
     Panel "0..1" --> "0..1" PaperAsset : 使用裁剪资产
     Paper "1" --> "0..*" PendingJob : 触发
+    BatchRun "1" --> "1..*" BatchItem : 清单
+    BatchItem --> "0..1" Paper : 注册
+    BatchItem --> "0..*" PendingJob : 历史任务
     Paper --> StorageObject : 原始 PDF / MinerU / audit
     PaperAsset --> StorageObject : 图片对象
     PendingJob "1" --> "0..1" ExtractionRun : 唯一运行
@@ -288,12 +303,14 @@ extraction/
 │   ├── api/
 │   │   └── papers.py                 # 论文、图、资产、提取与审计 HTTP API
 │   ├── models/                       # SQLAlchemy 领域持久化模型
+│   │   ├── batch.py                   # BatchRun、BatchItem、BatchEvent
 │   │   ├── paper.py                  # Paper、PaperAsset、ImageExtraction
 │   │   ├── figure.py                 # Figure、Panel
 │   │   ├── job.py                    # PendingJob / lease / 幂等任务
 │   │   └── persistence.py            # Project、StorageObject、ExtractionRun、结果与交付
 │   │   └── enums.py                  # 状态枚举
 │   ├── services/
+│   │   ├── batches.py                 # Batch 提交、注册恢复与结果复用
 │   │   ├── pdf/                      # PDF 用例编排边界
 │   │   │   ├── upload_service.py     # 上传、校验、入队
 │   │   │   ├── parse_service.py      # MinerU 解析与资产构建
@@ -368,9 +385,11 @@ extraction/
 
 `POST /papers/upload` → PDF 校验 → `StorageAdapter` 上传 PDF + `storage_objects` 登记 → Paper/幂等 PendingJob 事务提交 → Redis 仅发送 `job_id` → worker 行锁/lease claim → materialize PDF → MinerU → 对象化 raw/content/layout/images → Figure/Panel/Asset 元数据提交。
 
+Batch U1-U5：目录发现与 SHA-256 在事务外完成 → `BatchRun` 与全部 `BatchItem` 清单一次提交（同一 project 的 `submission_key` 幂等）→ 每个未注册 Item 在短事务中注册 Paper、绑定 Item 并写事件 → 在取得 BatchRun/Item/Paper 行锁前探测兼容结果对象可用性 → BatchRun 行锁计算 durable active Job 窗口，按 Paper ID 顺序创建 batch-linked parse Job 并将 Item 置为 queued → 提交后才推送 Redis；失败推送保留同一 Job 供恢复重派。对象探测为三态：存在才复用、明确不存在才允许新执行、timeout/403/5xx 等不确定结果保持 Item pending 并等待后续恢复周期，且不同 BatchRun 的恢复错误相互隔离。调度在 Paper 锁内先检查 active parse：普通 Item 等待 active attempt 结束后才复用成功或传播失败；显式 retry 等待结束后仍创建新的 `retry_of_job_id` Job，不会被兼容结果吞掉。复用要求规范化结果、raw-response artifact 数据库事实和实际对象字节都可用。V1 部署拓扑是单机单 worker 进程，有限并发发生在进程内；周期恢复扫描保护当前 `hostname:pid` owner 的 processing Job，不会因本进程 heartbeat 暂时失败而自我重派。替代 worker 仅在部署确认旧进程退出后恢复旧 owner 的过期 Job，不提供多 worker、多主 scheduler 或实时 lease 抢占语义。worker claim 将 Item 同步为 processing；终态按 BatchRun → Job → BatchItem → Paper → ExtractionRun 加锁，并在一个事务中更新 Run、Job、Item、Event 与 BatchRun 聚合。取消只停止未开始工作。`register_pdf()` 不入队；单篇入口仍通过 Paper 锁 admission 创建 parse Job。
+
 ### 5.3 数据图提取流
 
-`POST /papers/{id}/chart-only/run`（或批量入口）→ 幂等任务 → worker claim + PostgreSQL advisory lock → 创建 `ExtractionRun(running)` → 从对象引用重建临时输入 → `content_pipeline` → 质量门 → 原始模型响应/全部输出上传对象存储 + `StructuredResult` 事务写入 → 运行终态与任务完成 → 前端按对象化 audit 轮询展示。任何重试都会创建新任务/新运行。
+`POST /papers/{id}/chart-only/run`（或批量入口）→ 幂等任务 → worker claim + PostgreSQL advisory lock → 创建 `ExtractionRun(running)` → 从对象引用重建临时输入 → `content_pipeline` → 质量门 → 原始模型响应/全部输出按 claim generation 与内容摘要写入不可覆盖 staging key → fencing 校验通过后登记对象、写入 `StructuredResult` 并原子提交运行/任务终态 → 前端按对象化 audit 轮询展示。显式 retry 创建新任务/新运行；transport retry 复用原任务、原运行和冻结输入。
 
 ### 5.4 冻结交付流
 
@@ -429,6 +448,7 @@ frontend → HTTP API → app application services → content_pipeline public A
 | [ADR-008](docs/adr/0008-postgresql-online-database.md) | PostgreSQL 作为在线业务数据库 | 已采纳 | 行级并发、事务约束、lease/claim 与多副本恢复 | 需生产备份、监控和迁移演练 |
 | [ADR-009](docs/adr/0009-object-storage-for-artifacts.md) | 对象存储保存大型/非结构化产物 | 已采纳 | 去除共享目录和数据库 BLOB，建立稳定校验引用 | 需生命周期、版本、加密和垃圾回收策略 |
 | [ADR-010](docs/adr/0010-duckdb-parquet-delivery-snapshots.md) | DuckDB + Parquet 仅作冻结交付 | 已采纳 | 离线分析友好且不牺牲在线事务模型 | 发布版本不可覆盖；跨依赖版本以数据等价而非字节相同为准 |
+| [ADR-011](docs/adr/0011-batch-processing-orchestration.md) | Batch V1 使用 PostgreSQL 事实与有界调度 | 已采纳 | CLI 退出和 Redis 丢失后仍可恢复清单、进度与 Job lineage | V1 限定单机单 worker；切换实例前必须确认旧进程退出 |
 
 新增重要决策时，在本表追加；若包含复杂权衡，可在 `docs/adr/NNNN-*.md` 写完整 ADR，并从此处链接。
 

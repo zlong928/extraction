@@ -1,3 +1,4 @@
-from app.repositories.jobs import JobRepository, LostJobLease
+from app.repositories.batches import BatchRepository
+from app.repositories.jobs import JobClaim, JobRepository, LostJobLease
 
-__all__ = ["JobRepository", "LostJobLease"]
+__all__ = ["BatchRepository", "JobClaim", "JobRepository", "LostJobLease"]
