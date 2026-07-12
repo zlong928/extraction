@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import struct
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from app.models import Figure, Panel, Paper, PaperAsset
 from app.services.local_image_profiler import LocalImageProfiler
 from app.services.mineru_asset_builder_panel_context import build_panel_context_record
 from app.services.storage import StorageService
+from app.services.object_store import ObjectStore
 from app.services.mineru_asset_builder_paths import (
     content_list_image_paths,
     resolve_image,
@@ -70,13 +70,12 @@ class MinerUAssetBuilder:
                 return None
             seen_filenames.add(filename)
 
-            relative_path = self._copy_asset(paper, image_path, len(assets))
-            if not relative_path:
+            stored = self._copy_asset(paper, image_path, len(assets))
+            if stored is None:
                 return None
-
-            copied_path = self.storage.absolute_path(relative_path)
-            width, height = self._image_dimensions(copied_path)
-            file_size = self._file_size(copied_path)
+            relative_path = stored.object_key
+            width, height = self._image_dimensions(image_path)
+            file_size = self._file_size(image_path)
             full_caption = self._merged_caption_from_parts(alt, content_match.get("content_list_caption", ""))
             panel_id = self._panel_id(alt) or self._panel_id(full_caption)
             mineru_type = str(content_match.get("mineru_type") or "markdown_image")
@@ -175,6 +174,7 @@ class MinerUAssetBuilder:
             }
             return PaperAsset(
                 paper_id=paper.id,
+                object_id=stored.id,
                 asset_type="figure",
                 asset_index=len(assets),
                 label=label,
@@ -740,11 +740,15 @@ class MinerUAssetBuilder:
             return []
         return content_list_image_paths(content_list, image_dir)
 
-    def _copy_asset(self, paper: Paper, source: Path, index: int) -> str | None:
-        destination = self.storage.asset_dir(paper.id) / f"mineru-{index + 1}{source.suffix or '.png'}"
+    def _copy_asset(self, paper: Paper, source: Path, index: int):
+        key = f"papers/{paper.id}/assets/mineru-{index + 1}{source.suffix or '.png'}"
         try:
-            shutil.copyfile(source, destination)
-            return self.storage.relative_path(destination)
+            return ObjectStore(self.db, self.storage.adapter).put_file(
+                key=key,
+                source=source,
+                media_type=self._mime_type(source.name),
+                metadata={"role": "extracted_image", "paper_id": paper.id, "asset_index": index},
+            )
         except Exception:
             return None
 

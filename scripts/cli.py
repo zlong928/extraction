@@ -85,8 +85,9 @@ def _verbose_json(data: dict, label: str = "") -> None:
 
 
 def _build_cli_pipeline_client() -> Any | None:
-    from content_pipeline.llm.client import build_content_pipeline_client
-    client = build_content_pipeline_client()
+    from app.services.agent.llm_client import LLMClient
+    from app.services.extraction.llm_config import build_vlm_config
+    client = LLMClient(build_vlm_config())
     if client is None:
         _out("[yellow]\u26a0 \u672a\u8bbe\u7f6e LLM API Key\uff0c\u4f7f\u7528\u672c\u5730\u89c4\u5219 fallback[/yellow]")
     return client
@@ -183,13 +184,14 @@ def content_pipeline(
         output_dir=out_dir,
         options=ExtractionPipelineOptions(fail_fast=False),
         on_llm_disabled=lambda msg: _out(f"[yellow]{msg}[/yellow]"),
+        client_factory=_build_cli_pipeline_client,
     )
     extractor_modes = summary.extractor_modes
     digitization_count = summary.digitization_count
-    mode_breakdown = " ".join(f"{k}={v}" for k, v in sorted(extractor_modes.items()))
+    " ".join(f"{k}={v}" for k, v in sorted(extractor_modes.items()))
     digitization_count = summary.digitization_count
     _always("=== Pipeline Results ===")
-    _always(f"engine=content_graph_pipeline")
+    _always("engine=content_graph_pipeline")
     _always(f"status={result.status}")
     _always(f"figures={result.figure_panel_graph.get('figure_count', 0)}")
     _always(f"panels={result.figure_panel_graph.get('panel_count', 0)}")

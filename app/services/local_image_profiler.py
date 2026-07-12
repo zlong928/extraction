@@ -66,7 +66,6 @@ class LocalImageProfiler:
         bbox: list[Any] | None = None,
         layout_page: dict[str, Any] | None = None,
     ) -> LocalImageProfile:
-        combined = " ".join(part for part in [caption, nearby_text] if part).lower()
         skip_reasons: list[str] = []
         if width is not None and height is not None:
             if width < cls.MIN_EXTRACTABLE_DIMENSION or height < cls.MIN_EXTRACTABLE_DIMENSION:

@@ -1,0 +1,14 @@
+# Repository ownership is intentionally split by architecture boundary.
+# These GitHub teams are the accountable owners for review and escalation.
+* @zlong928 @extraction/engineering
+
+/app/api/ @zlong928 @extraction/backend
+/app/services/ @zlong928 @extraction/backend
+/app/models/ @zlong928 @extraction/backend
+/app/queue/ @zlong928 @extraction/platform
+/app/db.py @zlong928 @extraction/platform
+/content_pipeline/ @zlong928 @extraction/content-pipeline
+/frontend/ @zlong928 @extraction/frontend
+/docs/ @zlong928 @extraction/data-quality
+/ARCHITECTURE.md @zlong928 @extraction/engineering @extraction/content-pipeline
+/migrations/ @zlong928 @extraction/platform @extraction/backend

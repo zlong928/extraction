@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from content_pipeline.contracts.blocks import ContentBlock, LayoutMatch
+from content_pipeline.contracts.blocks import LayoutMatch
 from content_pipeline.contracts.graph import DocumentGraph
 
 

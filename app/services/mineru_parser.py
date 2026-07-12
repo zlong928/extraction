@@ -112,7 +112,6 @@ _BLOCK_TYPE_MAP: dict[str, str] = {
     "aside_text": "aside",
     "ocr_text": "ocr_text",
     "paragraph_title": "heading",
-    "doc_title": "heading",
 }
 
 _MARKDOWN_IMAGE_RE = MARKDOWN_IMAGE_RE
@@ -166,7 +165,6 @@ def _caption_v2(item: dict[str, Any]) -> str:
     return ""
 
 
-
 def _load_markdown_image_map(archive: zipfile.ZipFile) -> dict[str, dict[str, str]]:
     """Build {filename: {"alt": ..., "path": ...}} from markdown in zip.
     Strips Markdown title attributes (e.g. ![](path \"title\")) from the path.
@@ -187,7 +185,6 @@ def _load_markdown_image_map(archive: zipfile.ZipFile) -> dict[str, dict[str, st
         filename = Path(path_clean).name
         result[filename] = {"alt": alt, "path": path_clean}
     return result
-
 
 
 def _v2_to_elements(

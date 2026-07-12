@@ -11,11 +11,12 @@ FLAGS:
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-import sys; sys.path.insert(0, str(ROOT))
+import sys
+
+sys.path.insert(0, str(ROOT))
 
 from content_pipeline import run_content_graph_pipeline
 from content_pipeline.contracts.audit import ExtractionPipelineOptions
@@ -25,7 +26,8 @@ REAL_LLM = "--real-llm" in sys.argv
 
 def _write_png(path: Path, width: int = 200, height: int = 150) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    import zlib, struct as st
+    import zlib
+    import struct as st
     raw = b"".join(b"\x00" + bytes([200, 200, 200] * width) for _ in range(height))
     compressed = zlib.compress(raw)
     def chunk(t: int, d: bytes) -> bytes:
@@ -125,8 +127,8 @@ def main():
     output_dir.mkdir()
 
     if REAL_LLM:
-        from content_pipeline.llm.client import build_content_pipeline_client
-        client = build_content_pipeline_client()
+        from app.services.pdf.pipeline import build_backend_content_pipeline_client
+        client = build_backend_content_pipeline_client()
         if client is None:
             print("❌ No LLM client — set VLM_API_KEY or OPENAI_API_KEY in .env")
             sys.exit(1)
@@ -163,7 +165,7 @@ def main():
         for e in result.errors[:5]:
             print(f"   - {e}")
 
-    print(f"\n📂 Output files:")
+    print("\n📂 Output files:")
     for k, v in result.output_paths.items():
         if v:
             print(f"   {k}: {v}")
@@ -173,7 +175,7 @@ def main():
         for r in result.audit_trace:
             ev = r.get("event", "(empty)")
             events[ev] = events.get(ev, 0) + 1
-        print(f"\n📊 Event summary:")
+        print("\n📊 Event summary:")
         for ev, cnt in sorted(events.items(), key=lambda x: -x[1]):
             print(f"   {ev:45s} {cnt:3d}")
 

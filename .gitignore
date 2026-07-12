@@ -50,6 +50,7 @@ Thumbs.db
 # Environment config
 .env
 .env.*
+!.env.example
 .env.backup*
 
 # uv / tooling

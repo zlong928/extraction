@@ -5,11 +5,14 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
+from content_pipeline.contracts.audit import CSV_SCHEMA_VERSION, build_run_metadata
 from content_pipeline.contracts.metric_contract import ProjectedMetricRow
 from content_pipeline.contracts.panel_facts import PanelFactRow
 
 
-METRIC_CSV_FIELDS = [
+CSV_METADATA_FIELDS = ["schema_version", "run_id", "model_id", "prompt_set_id"]
+
+METRIC_CSV_FIELDS = CSV_METADATA_FIELDS + [
     "source_image",
     "material_or_matrix",
     "biological_agent",
@@ -28,7 +31,7 @@ METRIC_CSV_FIELDS = [
     "direction",
 ]
 
-CHART_FACT_CSV_FIELDS = [
+CHART_FACT_CSV_FIELDS = CSV_METADATA_FIELDS + [
     "fact_id",
     "paper_id",
     "figure_id",
@@ -58,7 +61,7 @@ CHART_FACT_CSV_FIELDS = [
     "evidence_ids",
 ]
 
-HEATMAP_CANDIDATE_CSV_FIELDS = [
+HEATMAP_CANDIDATE_CSV_FIELDS = CSV_METADATA_FIELDS + [
     "candidate_id",
     "paper_id",
     "figure_id",
@@ -79,7 +82,7 @@ HEATMAP_CANDIDATE_CSV_FIELDS = [
     "evidence_ids",
 ]
 
-IMAGE_FACT_CSV_FIELDS = [
+IMAGE_FACT_CSV_FIELDS = CSV_METADATA_FIELDS + [
     "paper_id", "figure_id", "panel_id", "source_image", "image_kind",
     "observation_name", "target_entity", "qualitative_value", "numeric_value",
     "unit", "condition", "method", "confidence", "needs_verification",
@@ -87,30 +90,47 @@ IMAGE_FACT_CSV_FIELDS = [
 ]
 
 
-def write_metric_csv(path: str | Path, rows: Iterable[ProjectedMetricRow]) -> Path:
+def write_metric_csv(
+    path: str | Path,
+    rows: Iterable[ProjectedMetricRow],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    metadata = metadata or build_run_metadata()
     with out.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=METRIC_CSV_FIELDS)
         writer.writeheader()
         for row in rows:
-            writer.writerow(public_metric_csv_dict(row))
+            writer.writerow(_with_csv_metadata(public_metric_csv_dict(row), metadata))
     return out
 
 
-def write_chart_fact_csv(path: str | Path, rows: Iterable[PanelFactRow]) -> Path:
+def write_chart_fact_csv(
+    path: str | Path,
+    rows: Iterable[PanelFactRow],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    metadata = metadata or build_run_metadata()
     with out.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=CHART_FACT_CSV_FIELDS)
         writer.writeheader()
         for row in rows:
-            writer.writerow(row.csv_dict())
+            writer.writerow(_with_csv_metadata(row.csv_dict(), metadata))
     return out
 
 
-def write_panel_fact_csv(path: str | Path, rows: Iterable[PanelFactRow]) -> Path:
-    return write_chart_fact_csv(path, rows)
+def write_panel_fact_csv(
+    path: str | Path,
+    rows: Iterable[PanelFactRow],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    return write_chart_fact_csv(path, rows, metadata=metadata)
 
 
 def write_heatmap_candidate_csv(
@@ -118,19 +138,27 @@ def write_heatmap_candidate_csv(
     rows: Iterable[dict[str, Any]],
     *,
     image_by_panel: dict[str, str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    metadata = metadata or build_run_metadata()
     image_by_panel = image_by_panel or {}
     with out.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=HEATMAP_CANDIDATE_CSV_FIELDS)
         writer.writeheader()
         for row in rows:
-            writer.writerow(_heatmap_candidate_csv_dict(row, image_by_panel))
+            writer.writerow(_with_csv_metadata(_heatmap_candidate_csv_dict(row, image_by_panel), metadata))
     return out
 
 
-def write_chart_fact_tables(output_dir: str | Path, rows: Iterable[PanelFactRow]) -> dict[str, str]:
+def write_chart_fact_tables(
+    output_dir: str | Path,
+    rows: Iterable[PanelFactRow],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    metadata = metadata or build_run_metadata()
     grouped: dict[str, list[PanelFactRow]] = {}
     for row in rows:
         grouped.setdefault(row.panel_id or "unknown_panel", []).append(row)
@@ -138,27 +166,39 @@ def write_chart_fact_tables(output_dir: str | Path, rows: Iterable[PanelFactRow]
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: dict[str, str] = {}
     for panel_id, panel_rows in sorted(grouped.items()):
-        path = write_chart_fact_csv(out_dir / f"{_safe_panel_filename(panel_id)}.csv", panel_rows)
+        path = write_chart_fact_csv(
+            out_dir / f"{_safe_panel_filename(panel_id)}.csv", panel_rows, metadata=metadata
+        )
         paths[panel_id] = str(path)
     return paths
 
 
-def write_image_fact_csv(path: str | Path, rows: Iterable[Any]) -> Path:
+def write_image_fact_csv(
+    path: str | Path,
+    rows: Iterable[Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
     """Write ImageObservation rows to CSV. Each row must have csv_dict()."""
-    from content_pipeline.contracts.visual import ImageObservation
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    metadata = metadata or build_run_metadata()
     with out.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=IMAGE_FACT_CSV_FIELDS)
         writer.writeheader()
         for row in rows:
-            writer.writerow(row.csv_dict())
+            writer.writerow(_with_csv_metadata(row.csv_dict(), metadata))
     return out
 
 
-def write_image_fact_tables(output_dir: str | Path, rows: Iterable[Any]) -> dict[str, str]:
+def write_image_fact_tables(
+    output_dir: str | Path,
+    rows: Iterable[Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
     """Write per-panel ImageObservation CSV files, grouped by panel_id."""
-    from content_pipeline.contracts.visual import ImageObservation
+    metadata = metadata or build_run_metadata()
     grouped: dict[str, list[Any]] = {}
     for row in rows:
         grouped.setdefault(row.panel_id or "unknown_panel", []).append(row)
@@ -166,7 +206,9 @@ def write_image_fact_tables(output_dir: str | Path, rows: Iterable[Any]) -> dict
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: dict[str, str] = {}
     for panel_id, panel_rows in sorted(grouped.items()):
-        path = write_image_fact_csv(out_dir / f"{_safe_panel_filename(panel_id)}.csv", panel_rows)
+        path = write_image_fact_csv(
+            out_dir / f"{_safe_panel_filename(panel_id)}.csv", panel_rows, metadata=metadata
+        )
         paths[panel_id] = str(path)
     return paths
 
@@ -176,7 +218,9 @@ def write_heatmap_candidate_tables(
     rows: Iterable[dict[str, Any]],
     *,
     image_by_panel: dict[str, str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, str]:
+    metadata = metadata or build_run_metadata()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row.get("panel_id") or "unknown_panel"), []).append(row)
@@ -188,13 +232,19 @@ def write_heatmap_candidate_tables(
             out_dir / f"{_safe_panel_filename(panel_id)}.csv",
             panel_rows,
             image_by_panel=image_by_panel,
+            metadata=metadata,
         )
         paths[panel_id] = str(path)
     return paths
 
 
-def write_panel_fact_tables(output_dir: str | Path, rows: Iterable[PanelFactRow]) -> dict[str, str]:
-    return write_chart_fact_tables(output_dir, rows)
+def write_panel_fact_tables(
+    output_dir: str | Path,
+    rows: Iterable[PanelFactRow],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    return write_chart_fact_tables(output_dir, rows, metadata=metadata)
 
 
 def public_metric_csv_dict(row: ProjectedMetricRow) -> dict[str, str]:
@@ -223,6 +273,17 @@ def _csv_cell(value: Any) -> str:
         import json
         return json.dumps(value, ensure_ascii=False)
     return str(value)
+
+
+def _with_csv_metadata(row: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
+    metadata = metadata or {}
+    return {
+        **row,
+        "schema_version": CSV_SCHEMA_VERSION,
+        "run_id": metadata.get("run_id", ""),
+        "model_id": metadata.get("model_id", ""),
+        "prompt_set_id": metadata.get("prompt_set_id", ""),
+    }
 
 
 def _source_image(row: ProjectedMetricRow) -> str:

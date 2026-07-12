@@ -1,15 +1,34 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.config import DATABASE_URL, ensure_runtime_dirs
+from app.config import BASE_DIR, DATA_DIR, DATABASE_URL, ensure_runtime_dirs
 
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
+
+
+def enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
+
+
+if DATABASE_URL.startswith("sqlite"):
+    event.listen(engine, "connect", enable_sqlite_foreign_keys)
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -19,10 +38,31 @@ class Base(DeclarativeBase):
 
 def create_db_and_tables() -> None:
     ensure_runtime_dirs()
-    import app.models  # noqa: F401
+    alembic_config = Config(str(Path(BASE_DIR) / "alembic.ini"))
+    alembic_config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
+    with _migration_lock():
+        command.upgrade(alembic_config, "head")
 
-    Base.metadata.create_all(bind=engine)
-    _apply_compat_migrations()
+
+@contextmanager
+def _migration_lock():
+    if DATABASE_URL.startswith("postgresql"):
+        with engine.connect() as connection:
+            connection.execute(text("SELECT pg_advisory_lock(784512039)"))
+            try:
+                yield
+            finally:
+                connection.execute(text("SELECT pg_advisory_unlock(784512039)"))
+        return
+    import fcntl
+
+    lock_path = Path(DATA_DIR) / ".alembic-migration.lock"
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -31,39 +71,3 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
-
-
-def _apply_compat_migrations() -> None:
-    with engine.begin() as conn:
-        inspector = inspect(conn)
-        existing_tables = set(inspector.get_table_names())
-        existing_columns: dict[str, set[str]] = {}
-        for table_name in existing_tables:
-            existing_columns[table_name] = {col["name"] for col in inspector.get_columns(table_name)}
-
-        _migrate_paper_columns(conn, existing_columns.get("papers", set()))
-        _migrate_paper_assets_columns(conn, existing_columns.get("paper_assets", set()))
-        _migrate_image_extractions_columns(conn, existing_columns.get("image_extractions", set()))
-
-
-def _migrate_paper_columns(conn, existing: set[str]) -> None:
-    wanted: dict[str, str] = {
-        "mineru_markdown": "TEXT",
-        "mineru_artifact_dir": "VARCHAR(1000)",
-        "mineru_extract_dir": "VARCHAR(1000)",
-        "mineru_content_list_path": "VARCHAR(1000)",
-        "layout_data": "TEXT",
-    }
-    for column, column_type in wanted.items():
-        if column not in existing:
-            conn.execute(text(f"ALTER TABLE papers ADD COLUMN {column} {column_type}"))
-
-
-def _migrate_paper_assets_columns(conn, existing: set[str]) -> None:
-    if "figure_id" not in existing:
-        conn.execute(text("ALTER TABLE paper_assets ADD COLUMN figure_id INTEGER REFERENCES figures(id)"))
-
-
-def _migrate_image_extractions_columns(conn, existing: set[str]) -> None:
-    if "figure_id" not in existing:
-        conn.execute(text("ALTER TABLE image_extractions ADD COLUMN figure_id INTEGER REFERENCES figures(id)"))

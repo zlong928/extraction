@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-
-import json
-
+from importlib.util import find_spec
 import pytest
 
-try:
-    from jsonschema import validate
-except ModuleNotFoundError:
+if find_spec("jsonschema") is None:
     pytest.skip("jsonschema not installed", allow_module_level=True)
 
 ROOT = Path(__file__).resolve().parents[1]

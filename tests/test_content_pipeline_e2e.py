@@ -256,7 +256,7 @@ def test_e2e_audit_trace_contains_evidence_ids(tmp_path: Path) -> None:
     content_path = tmp_path / "content_list_v2.json"
     content_path.write_text(json.dumps(pages), encoding="utf-8")
 
-    result = run_content_graph_pipeline(
+    run_content_graph_pipeline(
         content_list_path=str(content_path),
         layout_path=None,
         image_root=str(tmp_path),

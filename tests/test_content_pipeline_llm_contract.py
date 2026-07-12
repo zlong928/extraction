@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from content_pipeline.contracts.errors import ExtractionPhaseError, ExtractionSchemaError
+from content_pipeline.contracts.errors import ExtractionPhaseError
 from content_pipeline.llm.phase_runner import PhaseRunner
 from content_pipeline.llm.phase_schemas import PANEL_CLASSIFICATION_SCHEMA
 from content_pipeline.llm.schema_distiller import SchemaDistiller

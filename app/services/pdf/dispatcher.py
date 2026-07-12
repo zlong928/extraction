@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import PAPER_PARSE_QUEUE_NAME
 from app.models import Paper, PaperStatus
 from app.models.job import PendingJob
+from app.queue.contracts import queue_payload
 from app.queue.redis_queue import RedisQueue
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,13 @@ def dispatch_stale_pending_jobs(db: Session) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STALE_THRESHOLD_MINUTES)
     stale = (
         db.query(PendingJob)
-        .filter(PendingJob.status == "pending", PendingJob.created_at < cutoff)
+        .filter(
+            or_(
+                (PendingJob.status.in_(["pending", "redis_dispatched", "retry"]))
+                & (PendingJob.updated_at < cutoff),
+                (PendingJob.status == "processing") & (PendingJob.lease_expires_at < datetime.now(timezone.utc)),
+            )
+        )
         .order_by(PendingJob.created_at.asc())
         .limit(20)
         .all()
@@ -34,15 +42,16 @@ def dispatch_stale_pending_jobs(db: Session) -> int:
             job.status = "cancelled"
             job.error_message = "paper not found or deleted"
             continue
-        if str(paper.status) in {PaperStatus.DONE.value, PaperStatus.PENDING.value}:
+        if str(paper.status) == PaperStatus.DONE.value and job.task_type == "paper_parse":
             job.status = "cancelled"
             job.error_message = f"paper status is {paper.status}, no longer needs dispatch"
             continue
         try:
-            RedisQueue(PAPER_PARSE_QUEUE_NAME).enqueue({
-                "task_type": job.task_type,
-                "paper_id": job.paper_id,
-            })
+            if job.status == "processing":
+                job.status = "retry"
+                job.lease_owner = None
+                job.lease_expires_at = None
+            RedisQueue(PAPER_PARSE_QUEUE_NAME).enqueue(queue_payload(job.task_type, job.id))
             job.status = "redis_dispatched"
             dispatched += 1
             logger.info("redis-dispatched stale job paper_id=%s task=%s", job.paper_id, job.task_type)

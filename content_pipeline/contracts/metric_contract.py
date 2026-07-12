@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-from typing import Any
 
 CANONICAL_METRIC_CATEGORIES: tuple[str, ...] = (
     "performance_metric",

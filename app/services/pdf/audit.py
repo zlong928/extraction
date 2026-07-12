@@ -8,6 +8,7 @@ from typing import Any
 
 from app.config import DATA_DIR
 from app.models import Paper, PaperStatus
+from app.services.storage import StorageService
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,10 @@ def _audit_summary_from_path(audit: Path) -> dict[str, Any] | None:
     except Exception:
         return None
 
+    return _audit_summary_from_data(data, audit_ref=str(audit))
+
+
+def _audit_summary_from_data(data: dict[str, Any], *, audit_ref: str) -> dict[str, Any]:
     panel_count = _int_at(data, "figure_panel_graph", "panel_count")
     figure_count = _int_at(data, "figure_panel_graph", "figure_count")
     semantic_done = len(data.get("panel_semantic_results") or []) if isinstance(
@@ -61,7 +66,7 @@ def _audit_summary_from_path(audit: Path) -> dict[str, Any] | None:
     if errors and not (metric_rows or chart_points or observations or digitized):
         result_state = "pipeline_errors"
     return {
-        "audit_path": str(audit),
+        "audit_path": audit_ref,
         "figure_count": figure_count,
         "panel_count": panel_count,
         "processed_panels": semantic_done,
@@ -85,7 +90,7 @@ def audit_summary_for_paper(paper: Paper) -> dict[str, Any] | None:
     if paper.status == PaperStatus.PROCESSING.value:
         running = _running_audit_summary_for_paper(
             paper.id,
-            panel_count=len(paper.assets),
+            panel_count=len([asset for asset in paper.assets if asset.is_active]),
             figure_count=len(paper.figures),
         )
         if running:
@@ -93,7 +98,7 @@ def audit_summary_for_paper(paper: Paper) -> dict[str, Any] | None:
         return {
             "audit_path": None,
             "figure_count": len(paper.figures),
-            "panel_count": len(paper.assets),
+            "panel_count": len([asset for asset in paper.assets if asset.is_active]),
             "processed_panels": 0,
             "progress_percent": 0,
             "metric_rows": 0,
@@ -110,6 +115,14 @@ def audit_summary_for_paper(paper: Paper) -> dict[str, Any] | None:
             "result_state": "running",
             "source": "running_events",
         }
+    if paper.latest_audit_object is not None:
+        try:
+            data = json.loads(StorageService().get_bytes(paper.latest_audit_object.object_key))
+            summary = _audit_summary_from_data(data, audit_ref=paper.latest_audit_object.uri)
+            summary["source"] = "current_run"
+            return summary
+        except Exception:
+            logger.exception("failed to read audit object for paper_id=%s", paper.id)
     current_run = DATA_DIR / "content_pipeline_results" / f"paper_{paper.id}" / "extraction_audit.json"
     if current_run.is_file():
         summary = _audit_summary_from_path(current_run)
@@ -123,6 +136,22 @@ def audit_summary_for_paper(paper: Paper) -> dict[str, Any] | None:
             summary["source"] = "historical_audit"
             return summary
     return None
+
+
+def audit_payload_for_paper(paper: Paper) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    if paper.latest_audit_object is not None:
+        try:
+            payload = json.loads(StorageService().get_bytes(paper.latest_audit_object.object_key))
+            return payload, "current_run", paper.latest_audit_object.uri
+        except Exception:
+            logger.exception("failed to read audit table object for paper_id=%s", paper.id)
+    path, source = audit_table_path_for_paper(paper)
+    if path is None:
+        return None, source, None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), source, str(path)
+    except Exception:
+        return None, source, str(path)
 
 
 def audit_table_path_for_paper(paper: Paper) -> tuple[Path | None, str | None]:

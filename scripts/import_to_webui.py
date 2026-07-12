@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.config import DATA_DIR
-from app.db import get_db, SessionLocal
+from app.db import SessionLocal
 from app.services.pdf.artifact_service import LocalMinerUArtifactService
 from app.services.pdf.audit import audit_table_path_for_paper
 from app.services.storage import StorageService
@@ -86,9 +86,9 @@ def main():
                           f"heatmap_candidates={len(data.get('heatmap_candidates') or [])}, "
                           f"image_observations={len(data.get('image_observations') or [])}")
                 else:
-                    print(f"  ⚠️  Audit table NOT found via historical matching")
+                    print("  ⚠️  Audit table NOT found via historical matching")
             else:
-                print(f"  ℹ️  No existing results; needs chart-only run from frontend")
+                print("  ℹ️  No existing results; needs chart-only run from frontend")
 
         print("\n=== Done ===")
     finally:

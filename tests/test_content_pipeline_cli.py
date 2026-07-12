@@ -4,9 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
-from content_pipeline.contracts.audit import ExtractionRunResult
 from content_pipeline.llm.client import FakeContentPipelineClient
 
 
@@ -99,3 +97,4 @@ def test_no_llm_does_not_claim_digitization(tmp_path: Path) -> None:
 
     assert result.status == "failed"
     assert not result.chart_digitization_results
+    assert (tmp_path / "extraction_audit.json").exists()

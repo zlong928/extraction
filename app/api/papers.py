@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session, selectinload
@@ -15,7 +12,7 @@ from app.services.pdf import (
     LocalMinerUArtifactService,
     PaperCleanupService,
     PaperUploadService,
-    audit_table_path_for_paper,
+    audit_payload_for_paper,
 )
 from app.services.audit_table_service import (
     chart_fact_records,
@@ -115,50 +112,45 @@ def get_paper_audit_tables(paper_id: int, response: Response, db: Session = Depe
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     paper = _paper_or_404(db, paper_id)
-    audit_file, source = audit_table_path_for_paper(paper)
-    audit_path = str(audit_file) if audit_file else None
-    if not audit_path:
+    data, source, audit_path = audit_payload_for_paper(paper)
+    if data is None:
         return {"tables": {}, "source": None}
-    try:
-        data = json.loads(open(audit_path, encoding="utf-8").read())
-    except Exception:
-        return {"tables": {}, "source": source}
 
-        image_by_panel = panel_image_map(data)
-        chart_fact_records_local = chart_fact_records(data)
-        tables = {
-            "chart_facts": rows_from_records(chart_fact_records_local, [
-            "source_image", "fact_id", "figure_id", "panel_id", "chart_type", "series_name", "point_index",
-            "x_label", "x_value", "x_unit", "y_label", "y_value", "y_unit", "z_label", "z_value", "z_unit",
-            "scale_factor", "category_label",
-            "confidence", "digitization_status", "needs_review", "source_phase",
-        ], image_by_panel=image_by_panel),
-        "chart_points": rows_from_records(chart_fact_records_local, [
-            "source_image", "fact_id", "figure_id", "panel_id", "chart_type", "series_name", "point_index",
-            "x_label", "x_value", "x_unit", "y_label", "y_value", "y_unit", "z_label", "z_value", "z_unit",
-            "scale_factor", "category_label",
-            "confidence", "digitization_status", "needs_review", "source_phase",
-        ], image_by_panel=image_by_panel),
-        "heatmap_candidates": rows_from_records(data.get("heatmap_candidates") or [], [
-            "source_image", "candidate_id", "figure_id", "panel_id", "metric_name", "series", "condition",
-            "value", "value_min", "value_max", "unit", "scale_factor", "evidence_type", "confidence",
-            "needs_review", "source_phase",
-        ], image_by_panel=image_by_panel),
-        "chart_digitization": rows_from_records(data.get("chart_digitization_results") or [], [
-            "source_image", "figure_id", "panel_id", "chart_type", "digitization_status",
-            "axis_readability", "legend_readability", "calibration_status",
-        ], image_by_panel=image_by_panel),
-        "metric_candidates": rows_from_records(data.get("metric_candidates") or [], [
-            "source_image", "candidate_id", "source_fact_id", "figure_id", "panel_id", "metric_name",
-            "matched_target_group_id", "value", "unit", "mapping_reason", "benchmark_relevance",
-            "needs_review", "confidence", "verifier_status", "verifier_reason",
-        ], image_by_panel=image_by_panel),
-        "metric_rows": rows_from_records(data.get("metric_rows") or [], [
-            "source_image", "figure_id", "panel_id", "metric_name", "value", "unit", "extraction_source", "release_status",
-        ], image_by_panel=image_by_panel),
-        "image_observations": rows_from_records(data.get("image_observations") or [], [
-            "source_image", "figure_id", "panel_id", "image_kind", "observation_name", "qualitative_value", "numeric_value", "unit",
-        ], image_by_panel=image_by_panel),
+    image_by_panel = panel_image_map(data)
+    chart_fact_records_local = chart_fact_records(data)
+    tables = {
+        "chart_facts": rows_from_records(chart_fact_records_local, [
+        "source_image", "fact_id", "figure_id", "panel_id", "chart_type", "series_name", "point_index",
+        "x_label", "x_value", "x_unit", "y_label", "y_value", "y_unit", "z_label", "z_value", "z_unit",
+        "scale_factor", "category_label",
+        "confidence", "digitization_status", "needs_review", "source_phase",
+    ], image_by_panel=image_by_panel),
+    "chart_points": rows_from_records(chart_fact_records_local, [
+        "source_image", "fact_id", "figure_id", "panel_id", "chart_type", "series_name", "point_index",
+        "x_label", "x_value", "x_unit", "y_label", "y_value", "y_unit", "z_label", "z_value", "z_unit",
+        "scale_factor", "category_label",
+        "confidence", "digitization_status", "needs_review", "source_phase",
+    ], image_by_panel=image_by_panel),
+    "heatmap_candidates": rows_from_records(data.get("heatmap_candidates") or [], [
+        "source_image", "candidate_id", "figure_id", "panel_id", "metric_name", "series", "condition",
+        "value", "value_min", "value_max", "unit", "scale_factor", "evidence_type", "confidence",
+        "needs_review", "source_phase",
+    ], image_by_panel=image_by_panel),
+    "chart_digitization": rows_from_records(data.get("chart_digitization_results") or [], [
+        "source_image", "figure_id", "panel_id", "chart_type", "digitization_status",
+        "axis_readability", "legend_readability", "calibration_status",
+    ], image_by_panel=image_by_panel),
+    "metric_candidates": rows_from_records(data.get("metric_candidates") or [], [
+        "source_image", "candidate_id", "source_fact_id", "figure_id", "panel_id", "metric_name",
+        "matched_target_group_id", "value", "unit", "mapping_reason", "benchmark_relevance",
+        "needs_review", "confidence", "verifier_status", "verifier_reason",
+    ], image_by_panel=image_by_panel),
+    "metric_rows": rows_from_records(data.get("metric_rows") or [], [
+        "source_image", "figure_id", "panel_id", "metric_name", "value", "unit", "extraction_source", "release_status",
+    ], image_by_panel=image_by_panel),
+    "image_observations": rows_from_records(data.get("image_observations") or [], [
+        "source_image", "figure_id", "panel_id", "image_kind", "observation_name", "qualitative_value", "numeric_value", "unit",
+    ], image_by_panel=image_by_panel),
     }
     return {"tables": tables, "source": source, "audit_path": audit_path}
 
@@ -258,16 +250,16 @@ def delete_paper_compat(paper_id: int, db: Session = Depends(get_db)) -> None:
 @router.get("/{paper_id}/assets", response_model=list[AssetRead])
 def list_assets(paper_id: int, db: Session = Depends(get_db)) -> list[AssetRead]:
     paper = _paper_or_404(db, paper_id)
-    return [AssetRead.from_model(asset) for asset in paper.assets]
+    return [AssetRead.from_model(asset) for asset in paper.assets if asset.is_active]
 
 
 @router.get("/assets/{asset_id}")
-def get_asset_file(asset_id: int, db: Session = Depends(get_db)) -> FileResponse:
+def get_asset_file(asset_id: int, db: Session = Depends(get_db)) -> Response:
     asset = _asset_or_404(db, asset_id)
-    path = StorageService().absolute_path(asset.file_path)
-    if not path.is_file():
+    storage = StorageService()
+    if not storage.exists(asset.file_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file not found.")
-    return FileResponse(path=path, media_type=asset.mime_type)
+    return Response(content=storage.get_bytes(asset.file_path), media_type=asset.mime_type)
 
 
 def _paper_or_404(db: Session, paper_id: int) -> Paper:
@@ -287,4 +279,3 @@ def _asset_or_404(db: Session, asset_id: int) -> PaperAsset:
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
     return asset
-

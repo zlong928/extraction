@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from content_pipeline.orchestration.pipeline_runner import run_content_graph_pipeline
@@ -187,7 +186,7 @@ def main() -> None:
         ),
     )
 
-    print(f"=== RESULT ===")
+    print("=== RESULT ===")
     print(f"  Status: {result.status}")
     print(f"  Errors: {len(result.errors)}")
 
@@ -235,7 +234,7 @@ def main() -> None:
         r for r in result.audit_trace
         if "failed" in r.get("event", "").lower()
     ]
-    print(f"  Original failures (ExtractionSchemaError): 6")
+    print("  Original failures (ExtractionSchemaError): 6")
     print(f"  New degraded events:                       {len(new_degraded)}")
     print(f"  New failure events:                        {len(new_failures)}")
     for d in new_degraded:

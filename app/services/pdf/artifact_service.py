@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import zipfile
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from app.services.mineru_asset_builder import MinerUAssetBuilder
 from app.services.pdf.audit import audit_summary_for_title
 from app.services.pdf.parse_service import PaperParseService
 from app.services.storage import StorageService
+from app.services.object_store import ObjectStore
 
 
 class LocalMinerUArtifactService:
@@ -205,22 +207,67 @@ class LocalMinerUArtifactService:
         self.db.add(paper)
         self.db.flush()
 
-        marker = self.storage.paper_dir(paper.id) / "local-mineru-artifact.json"
-        marker.write_text(json.dumps({
+        store = ObjectStore(self.db, self.storage.adapter)
+        marker_payload = {
             "content_list_path": str(content_list),
             "markdown_path": str(markdown_path) if markdown_path.is_file() else None,
             "layout_path": str(layout_path) if layout_path.is_file() else None,
             "source_path": str(source_path) if source_path.is_file() else None,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        paper.file_path = self.storage.relative_path(marker)
+        }
+        if source_path.is_file() and source_path.suffix.lower() == ".pdf":
+            source_object = store.put_file(
+                key=f"papers/{paper.id}/source/{file_hash}.pdf",
+                source=source_path,
+                media_type="application/pdf",
+                metadata={"role": "source_pdf", "imported_from": str(source_path)},
+            )
+            paper.pdf_object_id = source_object.id
+        else:
+            source_object = store.put_json(
+                key=f"papers/{paper.id}/source/local-mineru-artifact.json",
+                payload=marker_payload,
+                metadata={"role": "local_artifact_marker"},
+            )
+        paper.file_path = source_object.object_key
         paper.text_content = self._plain_text_preview(markdown)
-        paper.mineru_markdown = markdown
-        paper.mineru_artifact_dir = str(artifact_root)
-        paper.mineru_extract_dir = str(artifact_root)
-        paper.mineru_content_list_path = str(content_list)
+        paper.mineru_markdown = None
+        markdown_object = store.put_bytes(
+            key=f"papers/{paper.id}/mineru/local/document.md",
+            data=markdown.encode("utf-8"),
+            media_type="text/markdown",
+            metadata={"role": "mineru_markdown", "imported_from": str(markdown_path) if markdown_path.is_file() else None},
+        )
+        paper.mineru_markdown_object_id = markdown_object.id
+        content_object = store.put_file(
+            key=f"papers/{paper.id}/mineru/local/content_list.json",
+            source=content_list,
+            media_type="application/json",
+            metadata={"role": "mineru_content_list", "imported_from": str(content_list)},
+        )
+        paper.mineru_content_object_id = content_object.id
+        paper.mineru_content_list_path = content_object.object_key
+        paper.mineru_extract_dir = f"papers/{paper.id}/mineru/local"
         if layout_path.is_file():
+            layout_object = store.put_file(
+                key=f"papers/{paper.id}/mineru/local/layout.json",
+                source=layout_path,
+                media_type="application/json",
+                metadata={"role": "mineru_layout", "imported_from": str(layout_path)},
+            )
+            paper.mineru_layout_object_id = layout_object.id
             PaperParseService._store_layout_data(paper, str(layout_path))
+
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(item for item in artifact_root.rglob("*") if item.is_file()):
+                archive.write(path, path.relative_to(artifact_root).as_posix())
+        raw_object = store.put_bytes(
+            key=f"papers/{paper.id}/mineru/local/raw.zip",
+            data=archive_buffer.getvalue(),
+            media_type="application/zip",
+            metadata={"role": "mineru_raw_output", "imported_from": str(artifact_root)},
+        )
+        paper.mineru_artifact_dir = raw_object.object_key
 
         MinerUAssetBuilder(self.db, self.storage).ingest(
             paper,

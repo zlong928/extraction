@@ -34,6 +34,7 @@ __all__ = [
     "ExtractionSchemaError",
     "ExtractionPhaseError",
     "ExtractionRoutingError",
+    "PanelSemanticResult",
     "VisualExtractionContext",
     "ChartAxis",
     "ChartPoint",

@@ -126,20 +126,21 @@ class PaperRead(BaseModel):
     @classmethod
     def from_model(cls, paper: Paper, *, include_assets: bool = True, include_figures: bool = False) -> PaperRead:
         text = (paper.text_content or "").strip()
+        active_assets = [asset for asset in paper.assets if asset.is_active]
         return cls(
             id=paper.id,
             title=paper.title,
             original_filename=paper.original_filename,
             status=_status_value(paper.status, PaperStatus),
             page_count=paper.page_count,
-            asset_count=len(paper.assets),
+            asset_count=len(active_assets),
             figure_count=len(paper.figures),
             text_preview=text[:500] if text else None,
             error_message=paper.error_message,
             created_at=paper.created_at,
             updated_at=paper.updated_at,
             audit_summary=audit_summary_for_paper(paper),
-            assets=[AssetRead.from_model(asset) for asset in paper.assets] if include_assets else [],
+            assets=[AssetRead.from_model(asset) for asset in active_assets] if include_assets else [],
             figures=[FigureRead.from_model(fig) for fig in paper.figures] if include_figures else [],
         )
 

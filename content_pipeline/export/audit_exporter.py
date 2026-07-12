@@ -5,12 +5,12 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from content_pipeline.contracts.audit import AUDIT_SCHEMA_VERSION, build_run_metadata
 from content_pipeline.export.csv_contracts import (
     write_chart_fact_csv,
     write_chart_fact_tables,
     write_heatmap_candidate_csv,
     write_heatmap_candidate_tables,
-    write_image_fact_csv,
     write_image_fact_tables,
 )
 
@@ -24,26 +24,38 @@ class AuditExporter:
         panel_fact_rows: list[Any] | None = None,
         image_observations: list[Any] | None = None,
         options: Any | None = None,
+        run_metadata: dict[str, str] | None = None,
     ) -> dict[str, str]:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+        metadata = dict(audit_payload.get("run_metadata") or run_metadata or build_run_metadata())
+        audit_payload["schema_version"] = AUDIT_SCHEMA_VERSION
+        audit_payload["run_metadata"] = metadata
         audit_path = out_dir / "extraction_audit.json"
-        chart_fact_csv_path = write_chart_fact_csv(out_dir / "chart_facts.csv", panel_fact_rows or [])
-        panel_table_paths = write_chart_fact_tables(out_dir / "chart_fact_tables", panel_fact_rows or [])
+        chart_fact_csv_path = write_chart_fact_csv(
+            out_dir / "chart_facts.csv", panel_fact_rows or [], metadata=metadata
+        )
+        panel_table_paths = write_chart_fact_tables(
+            out_dir / "chart_fact_tables", panel_fact_rows or [], metadata=metadata
+        )
         heatmap_candidates = [item for item in audit_payload.get("heatmap_candidates") or [] if isinstance(item, dict)]
         image_by_panel = _image_by_panel(audit_payload)
         heatmap_candidate_csv_path = write_heatmap_candidate_csv(
             out_dir / "heatmap_candidates.csv",
             heatmap_candidates,
             image_by_panel=image_by_panel,
+            metadata=metadata,
         )
         heatmap_candidate_table_paths = write_heatmap_candidate_tables(
             out_dir / "heatmap_candidate_tables",
             heatmap_candidates,
             image_by_panel=image_by_panel,
+            metadata=metadata,
         )
         image_observations = [item for item in audit_payload.get("image_observations") or [] if hasattr(item, "csv_dict")]
-        image_fact_table_paths = write_image_fact_tables(out_dir / "image_fact_tables", image_observations or [])
+        image_fact_table_paths = write_image_fact_tables(
+            out_dir / "image_fact_tables", image_observations or [], metadata=metadata
+        )
         review_path = out_dir / "review.md"
         paths = {
             "audit_json": str(audit_path),
@@ -114,7 +126,7 @@ class AuditExporter:
                 lines.append(f"- {label}: {path} - {description}")
             lines.append("")
 
-        evidence_packets = payload.get("evidence_packets", [])
+        payload.get("evidence_packets", [])
         lines.append("## Figure / Panel Summary")
         for figure_id, summary in _figure_panel_summary(panel_semantics).items():
             lines.append(f"- {figure_id}: panel_type={summary['primary_panel_type']} panels={summary['panel_count']}")
