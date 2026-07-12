@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.db import SessionLocal
+from app.db import SessionLocal, create_db_and_tables
 from app.main import app
 from app.models import Figure, ImageExtraction, Panel, Paper, PaperAsset, PendingJob
 from app.services.document_parser import ParsedDocument, ParsedElement, ParsedPage
@@ -171,6 +171,7 @@ def test_retry_paper_parse_endpoint_resets_failed_paper(monkeypatch) -> None:
 
 
 def test_reparse_archives_stale_assets_and_preserves_historical_extractions(monkeypatch, tmp_path: Path) -> None:
+    create_db_and_tables()
     parsed = ParsedDocument(
         pages=[
             ParsedPage(
@@ -228,7 +229,9 @@ def test_reparse_archives_stale_assets_and_preserves_historical_extractions(monk
         db.add_all([panel, extraction])
         db.commit()
 
-        PaperParseService(db).parse(paper)
+        storage = StorageService(root=tmp_path / "storage")
+        storage.put_bytes(paper.file_path, _sample_pdf("reparse-cleanup"), media_type="application/pdf")
+        PaperParseService(db, storage=storage).parse(paper)
 
         archived = db.query(PaperAsset).filter(PaperAsset.paper_id == paper.id).one()
         assert archived.is_active is False
