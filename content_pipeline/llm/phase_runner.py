@@ -176,7 +176,11 @@ class PhaseRunner:
                 "adapter": getattr(pre_validate_normalizer, "__name__", "pre_validate_normalizer"),
             })
             if pre_validate_events:
-                audit.append({"phase_name": phase_name, "event": "schema_repair_applied", "repairs": pre_validate_events[:50]})
+                audit.append({
+                    "phase_name": phase_name,
+                    "event": "schema_repair_applied",
+                    "repairs": pre_validate_events[:50],
+                })
         payload, repair_events = _repair_payload_for_schema(
             payload=payload,
             schema=schema,
@@ -188,7 +192,7 @@ class PhaseRunner:
             audit.append({"phase_name": phase_name, "event": "schema_repair_applied", "repairs": repair_events[:50]})
 
         severity_counts = count_by_severity(all_repairs)
-        is_degraded = should_degrade(all_repairs, _dict_key_count(payload))
+        is_degraded = should_degrade(all_repairs)
 
         try:
             validate(instance=payload, schema=schema)
@@ -238,7 +242,12 @@ def _unwrap_contract_object(
     object_name = getattr(compact_contract, "object_name", "")
     schema_props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
     required = set(schema.get("required", []))
-    if object_name and object_name in payload and isinstance(payload.get(object_name), dict) and object_name not in schema_props:
+    if (
+        object_name
+        and object_name in payload
+        and isinstance(payload.get(object_name), dict)
+        and object_name not in schema_props
+    ):
         inner = payload[object_name]
         inner_keys = set(inner.keys())
         if required and inner_keys.intersection(required):
@@ -746,13 +755,12 @@ def _is_fallback(payload: dict[str, Any], adapter: PhaseAdapter) -> bool:
     fallback = adapter.fallback_payload()
     if not fallback:
         return False
-    if payload.get("warnings") and any("unrecoverable" in str(w) or "not_parsable" in str(w) or "no_chart" in str(w) or "failed" in str(w) for w in _ensure_warnings_list(payload)):
+    if payload.get("warnings") and any(
+        any(token in str(w) for token in ("unrecoverable", "not_parsable", "no_chart", "failed"))
+        for w in _ensure_warnings_list(payload)
+    ):
         return True
     return payload == fallback
-
-
-def _dict_key_count(payload: Any) -> int:
-    return len(payload) if isinstance(payload, dict) else 0
 
 
 def _ensure_warnings_list(payload: dict[str, Any]) -> list[str]:

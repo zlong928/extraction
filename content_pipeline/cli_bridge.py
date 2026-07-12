@@ -41,13 +41,16 @@ def run_content_pipeline(
     output_dir: str | Path | None = None,
     options: ExtractionPipelineOptions | None = None,
     on_llm_disabled: Callable[[str], None] | None = None,
+    model_client=None,
+    client_factory: Callable[[], object] | None = None,
 ) -> tuple[ExtractionRunResult, ContentPipelineRunSummary]:
     options = options or ExtractionPipelineOptions()
-    model_client = None
     if use_llm:
-        model_client = build_content_pipeline_client()
+        model_client = model_client or build_content_pipeline_client(client_factory)
         if model_client is None and on_llm_disabled is not None:
             on_llm_disabled("⚠ 未设置 LLM API Key，将使用本地规则 fallback")
+    else:
+        model_client = None
     result = run_content_graph_pipeline(
         content_list_path=str(content_list_path),
         layout_path=str(layout_path) if layout_path is not None else None,

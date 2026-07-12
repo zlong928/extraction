@@ -56,15 +56,15 @@ def run_one(name: str) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if REAL_LLM:
-        from content_pipeline.llm.client import build_content_pipeline_client
-        client = build_content_pipeline_client()
+        from app.services.pdf.pipeline import build_backend_content_pipeline_client
+        client = build_backend_content_pipeline_client()
         if client is None:
             return {"name": name, "status": "failed", "error": "No LLM client available"}
-        print(f"  🤖 REAL LLM", end="")
+        print("  🤖 REAL LLM", end="")
     else:
         from content_pipeline.llm.client import FakeContentPipelineClient
         client = FakeContentPipelineClient(behavior="valid")
-        print(f"  🤖 Fake LLM ", end="")
+        print("  🤖 Fake LLM ", end="")
 
     opts = ExtractionPipelineOptions(
         fail_fast=False,

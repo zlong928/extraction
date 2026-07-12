@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.core.constants import MARKDOWN_IMAGE_RE
 from content_pipeline.mineru.image_path_resolver import image_path_from_block, resolve_image_file
 
 

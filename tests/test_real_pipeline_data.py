@@ -71,6 +71,9 @@ def test_real_data_evidence_packets(real_doc_graph, real_fp_graph):
 
 def test_real_data_has_pipeline_inputs_manifest():
     import json
-    manifest = json.loads((BASE / "structured" / "manifest.json").read_text(encoding="utf-8"))
+    manifest_path = BASE / "structured" / "manifest.json"
+    if not manifest_path.is_file():
+        pytest.skip("real pipeline manifest fixture is not present")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest.get("pipeline_ready") is not False
     assert manifest.get("rebuilt") is True

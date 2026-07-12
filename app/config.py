@@ -13,6 +13,12 @@ DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR / "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 RESULT_DIR = DATA_DIR / "results"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'extraction.db'}")
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local").strip().lower()
+STORAGE_LOCAL_ROOT = Path(os.getenv("STORAGE_LOCAL_ROOT", UPLOAD_DIR))
+S3_BUCKET = os.getenv("S3_BUCKET", "")
+S3_PREFIX = os.getenv("S3_PREFIX", "extraction").strip("/")
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL") or None
+S3_REGION = os.getenv("S3_REGION", "us-east-1")
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(100 * 1024 * 1024)))
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 PAPER_PARSE_QUEUE_NAME = os.getenv("PAPER_PARSE_QUEUE_NAME", "paper_parse_queue")
@@ -28,6 +34,8 @@ MINERU_RESULT_RATE_LIMIT_PER_MINUTE = int(os.getenv("MINERU_RESULT_RATE_LIMIT_PE
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", os.getenv("LLM_API_KEY", ""))
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", os.getenv("LLM_MODEL", "gpt-4o-mini"))
+PIPELINE_VERSION = os.getenv("PIPELINE_VERSION", "content-pipeline.v1")
+PROMPT_VERSION = os.getenv("PROMPT_VERSION", "content-pipeline-prompts.v1")
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -42,3 +50,5 @@ def ensure_runtime_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    if STORAGE_BACKEND == "local":
+        STORAGE_LOCAL_ROOT.mkdir(parents=True, exist_ok=True)

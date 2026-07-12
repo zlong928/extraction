@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -11,12 +11,33 @@ from app.models.enums import ExtractionStatus, PaperStatus
 
 if TYPE_CHECKING:
     from app.models.figure import Figure, Panel
+    from app.models.persistence import ExtractionRun, Project, StorageObject
 
 
 class Paper(Base):
     __tablename__ = "papers"
+    __table_args__ = (
+        Index(
+            "uq_papers_project_active_hash",
+            "project_id",
+            "file_hash",
+            unique=True,
+            postgresql_where=text("status <> 'deleted'"),
+            sqlite_where=text("status <> 'deleted'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), default=1, index=True
+    )
+    pdf_object_id: Mapped[str | None] = mapped_column(
+        ForeignKey("storage_objects.id", ondelete="RESTRICT"), unique=True
+    )
+    mineru_content_object_id: Mapped[str | None] = mapped_column(ForeignKey("storage_objects.id", ondelete="RESTRICT"))
+    mineru_layout_object_id: Mapped[str | None] = mapped_column(ForeignKey("storage_objects.id", ondelete="RESTRICT"))
+    mineru_markdown_object_id: Mapped[str | None] = mapped_column(ForeignKey("storage_objects.id", ondelete="RESTRICT"))
+    latest_audit_object_id: Mapped[str | None] = mapped_column(ForeignKey("storage_objects.id", ondelete="RESTRICT"))
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
@@ -45,6 +66,15 @@ class Paper(Base):
         cascade="all, delete-orphan",
         order_by="Figure.id",
     )
+    project: Mapped[Project | None] = relationship(back_populates="papers")
+    pdf_object: Mapped[StorageObject | None] = relationship(foreign_keys=[pdf_object_id])
+    mineru_content_object: Mapped[StorageObject | None] = relationship(foreign_keys=[mineru_content_object_id])
+    mineru_layout_object: Mapped[StorageObject | None] = relationship(foreign_keys=[mineru_layout_object_id])
+    mineru_markdown_object: Mapped[StorageObject | None] = relationship(foreign_keys=[mineru_markdown_object_id])
+    latest_audit_object: Mapped[StorageObject | None] = relationship(foreign_keys=[latest_audit_object_id])
+    extraction_runs: Mapped[list[ExtractionRun]] = relationship(
+        back_populates="paper", foreign_keys="ExtractionRun.paper_id", order_by="ExtractionRun.created_at"
+    )
 
 
 class PaperAsset(Base):
@@ -53,6 +83,8 @@ class PaperAsset(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     paper_id: Mapped[int] = mapped_column(ForeignKey("papers.id"), index=True, nullable=False)
     figure_id: Mapped[int | None] = mapped_column(ForeignKey("figures.id"), nullable=True, index=True)
+    object_id: Mapped[str | None] = mapped_column(ForeignKey("storage_objects.id", ondelete="RESTRICT"), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True, nullable=False)
     asset_type: Mapped[str] = mapped_column(String(40), default="image", index=True, nullable=False)
     asset_index: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str | None] = mapped_column(String(300), nullable=True)
@@ -73,6 +105,7 @@ class PaperAsset(Base):
         cascade="all, delete-orphan",
         order_by="ImageExtraction.id",
     )
+    object: Mapped[StorageObject | None] = relationship(foreign_keys=[object_id])
 
 
 class ImageExtraction(Base):

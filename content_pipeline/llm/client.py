@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import importlib
-import os
 from pathlib import Path
 import base64
 import mimetypes
-import mimetypes
-from typing import Any
-
-from dotenv import load_dotenv
+import hashlib
+from threading import Lock
+from typing import Any, Callable
 
 
 _LOG = logging.getLogger(__name__)
@@ -18,19 +15,40 @@ _LOG = logging.getLogger(__name__)
 
 class ContentPipelineLLMClient:
     def __init__(self, client: Any | None = None) -> None:
-        self.client = client or _load_llm_client()(_load_vlm_config())
+        if client is None:
+            raise ValueError("ContentPipelineLLMClient requires an injected model client.")
+        self.client = client
+        self.raw_responses: list[dict[str, Any]] = []
+        self._raw_responses_lock = Lock()
 
     def call_json(self, *, prompt: str, inputs: dict[str, Any]) -> dict[str, Any]:
-        return self.client.chat_json(
+        phase = str(inputs.get("phase_name") or "content_pipeline_extraction")
+        response = self.client.chat_json(
             self._messages(prompt=prompt, inputs=inputs),
-            phase=str(inputs.get("phase_name") or "content_pipeline_extraction"),
+            phase=phase,
         )
+        self._record_raw_response(phase=phase, prompt=prompt, response=response)
+        return response
 
     def call_text(self, *, prompt: str, inputs: dict[str, Any]) -> str:
-        return self.client.chat_text(
+        phase = str(inputs.get("phase_name") or "content_pipeline_extraction")
+        response = self.client.chat_text(
             self._messages(prompt=prompt, inputs=inputs),
-            phase=str(inputs.get("phase_name") or "content_pipeline_extraction"),
+            phase=phase,
         )
+        self._record_raw_response(phase=phase, prompt=prompt, response=response)
+        return response
+
+    def _record_raw_response(self, *, phase: str, prompt: str, response: Any) -> None:
+        record = {
+            "sequence": 0,
+            "phase": phase,
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "response": response,
+        }
+        with self._raw_responses_lock:
+            record["sequence"] = len(self.raw_responses) + 1
+            self.raw_responses.append(record)
 
     @staticmethod
     def _resolve_image_ref(image_ref: str) -> str:
@@ -53,12 +71,14 @@ class ContentPipelineLLMClient:
         image_ref = inputs.get("image_ref", "")
         if image_ref:
             image_url = ContentPipelineLLMClient._resolve_image_ref(image_ref)
+        context = ContentPipelineLLMClient._filter_inputs(inputs)
+        context_text = json.dumps(context, ensure_ascii=False, default=str, indent=2)
         return [
             {"role": "system", "content": [
                 {"type": "text", "text": "You are a scientific content extraction VLM. Extract structured data from scientific figure images and their surrounding text context."},
             ]},
             {"role": "user", "content": [
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": f"{prompt}\n\nStructured evidence and context:\n{context_text}"},
                 *([{"type": "image_url", "image_url": {"url": image_url, "detail": "high"}}] if image_url else []),
             ]},
         ]
@@ -92,41 +112,14 @@ class ContentPipelineLLMClient:
         return {k: v for k, v in inputs.items() if k in keep and v}
 
 
-def build_content_pipeline_client() -> ContentPipelineLLMClient | None:
-    if os.getenv("EXTRACTION_DISABLE_LLM", "").strip().lower() in {"1", "true", "yes"}:
-        _LOG.warning("LLM client disabled via EXTRACTION_DISABLE_LLM=1; running rule-only mode.")
+def build_content_pipeline_client(
+    client_factory: Callable[[], Any] | None = None,
+) -> ContentPipelineLLMClient | None:
+    """Build from an injected provider adapter; the pipeline does not import app code."""
+    if client_factory is None:
+        _LOG.warning("No model client factory supplied; content pipeline LLM is disabled.")
         return None
-    key = os.getenv("VLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
-    if not key:
-        _maybe_load_dotenv()
-        key = os.getenv("VLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
-    if not key:
-        _LOG.warning(
-            "No LLM API key configured (VLM_API_KEY/OPENAI_API_KEY/LLM_API_KEY missing). "
-            "Running rule-only extraction mode."
-        )
-        return None
-    return ContentPipelineLLMClient()
-
-
-def _maybe_load_dotenv() -> None:
-    if os.getenv("OPENAI_API_KEY"):
-        return
-    for candidate in (Path.cwd(), Path(__file__).resolve().parents[3]):
-        env_file = candidate / ".env"
-        if env_file.is_file():
-            load_dotenv(env_file)
-            return
-
-
-def _load_llm_client() -> Any:
-    module = importlib.import_module("app.services.agent.llm_client")
-    return module.LLMClient
-
-
-def _load_vlm_config() -> dict[str, Any]:
-    module = importlib.import_module("app.services.extraction.llm_config")
-    return module.build_vlm_config()
+    return ContentPipelineLLMClient(client_factory())
 
 
 class FakeContentPipelineClient:

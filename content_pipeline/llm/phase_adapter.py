@@ -69,7 +69,7 @@ def count_by_severity(repairs: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def should_degrade(repairs: list[dict[str, Any]], total_keys_in_payload: int = 0) -> bool:
+def should_degrade(repairs: list[dict[str, Any]]) -> bool:
     counts = count_by_severity(repairs)
     if counts.get("critical", 0) >= 1:
         return True

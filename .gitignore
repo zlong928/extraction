@@ -50,6 +50,7 @@ Thumbs.db
 # Environment config
 .env
 .env.*
+!.env.example
 .env.backup*
 
 # uv / tooling
@@ -57,6 +58,7 @@ Thumbs.db
 .uv-cache/
 
 # Runtime data / generated outputs
+data/
 data/extraction.db
 data/extraction.db-journal
 data/uploads/
@@ -67,6 +69,12 @@ data/pipeline_batch_summary.jsonl
 data/mineru_batch_summary.jsonl
 data/content_pipeline_results/
 data/**/*.tmp
+
+# Local analysis / repository inspection artifacts
+.understand-anything/
+
+# Local batch run configuration
+batch-config.json
 
 # Binary / media outputs
 pdf/*.pdf

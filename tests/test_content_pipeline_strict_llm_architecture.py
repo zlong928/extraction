@@ -63,10 +63,17 @@ def test_panel_type_free_text_survives_payload_roundtrip() -> None:
 
 def test_panel_type_from_classifier_passes_to_result() -> None:
     class FakePacket:
-        paper_id = "p"; figure_id = "f"; panel_id = "p1"
-        image_ref = ""; primary_caption = None; provenance = {}
-        section_hierarchy = []; tables = []; formulas = []
-        allowed_context = []; references = []
+        paper_id = "p"
+        figure_id = "f"
+        panel_id = "p1"
+        image_ref = ""
+        primary_caption = None
+        provenance = {}
+        section_hierarchy = []
+        tables = []
+        formulas = []
+        allowed_context = []
+        references = []
     payload = {
         "panel_relevance": "context_only", "extraction_decision": "skip_metric_extraction",
         "application_task": "", "assay": "", "metric_category": "",

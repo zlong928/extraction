@@ -37,7 +37,7 @@ def test_real_005_content_pipeline_runs_from_content_list_v2_for_five_panels(tmp
     assert len(result.evidence_packets) == 5
     assert len({packet.panel_id for packet in result.evidence_packets}) == 5
 
-    phases = [entry["inputs"].get("phase_name") for entry in fake.call_history]
+    [entry["inputs"].get("phase_name") for entry in fake.call_history]
     assert result.chart_digitization_results or result.visual_fact_results
 
 

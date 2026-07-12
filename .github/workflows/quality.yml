@@ -7,53 +7,85 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: extraction_test
+          POSTGRES_USER: extraction
+          POSTGRES_PASSWORD: extraction
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U extraction -d extraction_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://extraction:extraction@127.0.0.1:5432/extraction_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.11"
+          version: "latest"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install vulture pydeps flake8 pytest-cov
+        run: uv sync --dev
+
+      - name: Ruff
+        run: uv run ruff check .
 
       - name: Vulture dead-code scan
         run: |
-          vulture app content_pipeline tests --min-confidence 90
+          uv run vulture app content_pipeline tests --min-confidence 90
 
       - name: Reverse import/cycle scan
         run: |
-          pydeps --show-cycles --no-dot app
-          pydeps --show-cycles --no-dot content_pipeline
-          if pydeps --show-deps --no-dot content_pipeline | grep -q '"app\.'; then
+          uv run pydeps --show-cycles --no-dot app
+          uv run pydeps --show-cycles --no-dot content_pipeline
+          uv run pydeps --show-deps --no-dot content_pipeline > /tmp/content-pipeline-deps.txt
+          if grep -q '"app\.' /tmp/content-pipeline-deps.txt; then
             echo "content_pipeline should not import app packages"
             exit 1
           fi
 
       - name: Flake8 line length check
         run: |
-          flake8 \
-            app/api/extractions.py \
-            app/services/image_extraction.py \
+          uv run flake8 \
             app/services/mineru_asset_builder.py \
             app/services/mineru_asset_builder_panel_context.py \
             app/services/mineru_asset_builder_paths.py \
             app/services/mineru_parser.py \
             app/worker.py \
             content_pipeline/llm/phase_runner.py \
-            content_pipeline/metrics/metric_projector.py \
             content_pipeline/mineru/image_path_resolver.py \
             tests/test_real_pipeline_data.py
 
+      - name: Architecture boundary check
+        run: uv run python scripts/check_architecture_boundaries.py
+
       - name: File line length limit
         run: |
-          python scripts/check_file_limits.py app content_pipeline --max-lines 1500
+          uv run python scripts/check_file_limits.py app content_pipeline --max-lines 1500
 
       - name: Test coverage gate
         run: |
-          pytest --cov --cov-fail-under=60
+          uv run pytest --cov --cov-fail-under=60
+
+      - name: Frontend build
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build

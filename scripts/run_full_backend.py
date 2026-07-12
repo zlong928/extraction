@@ -27,9 +27,9 @@ OUTPUT_DIR = sys.argv[3] if len(sys.argv) > 3 else "data/content_pipeline_result
 
 
 def build_real_client() -> Any:
-    from content_pipeline.llm.client import build_content_pipeline_client
+    from app.services.pdf.pipeline import build_backend_content_pipeline_client
 
-    client = build_content_pipeline_client()
+    client = build_backend_content_pipeline_client()
     if client is None:
         raise RuntimeError(
             "No LLM client available. Set VLM_API_KEY or OPENAI_API_KEY in .env"
@@ -95,7 +95,7 @@ def analyze_results(audit: list[dict[str, Any]]) -> dict[str, Any]:
         if ev == "panel_extraction_skipped":
             pid = event.get("panel_id", "")
             reason = event.get("reason", "")
-            exc_reason = event.get("exclusion_reason", "")
+            event.get("exclusion_reason", "")
             roled = event.get("evidence_role", "")
             if "unusable" in roled or "missing" in reason:
                 analysis["panel_issues"].append(

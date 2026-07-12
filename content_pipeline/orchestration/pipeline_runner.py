@@ -6,7 +6,12 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from content_pipeline.contracts.audit import ExtractionPipelineOptions, ExtractionRunResult
+from content_pipeline.contracts.audit import (
+    AUDIT_SCHEMA_VERSION,
+    ExtractionPipelineOptions,
+    ExtractionRunResult,
+    build_run_metadata,
+)
 from content_pipeline.contracts.errors import ExtractionPipelineError
 from content_pipeline.contracts.panel_facts import build_panel_fact_rows
 from content_pipeline.evidence.context_selector import EvidenceContextSelector
@@ -37,6 +42,7 @@ class ContentGraphPipelineRunner:
         options: ExtractionPipelineOptions | None = None,
     ) -> ExtractionRunResult:
         options = options or ExtractionPipelineOptions()
+        run_metadata = build_run_metadata(model_client)
         audit: list[dict[str, Any]] = _audit_trace_for_output(output_dir)
         all_errors: list[dict[str, Any]] = []
         partial_failure = False
@@ -135,6 +141,8 @@ class ContentGraphPipelineRunner:
             output_paths: dict[str, str] = {}
             if output_dir:
                 audit_payload = {
+                    "schema_version": AUDIT_SCHEMA_VERSION,
+                    "run_metadata": run_metadata,
                     "options": {k: getattr(options, k) for k in ("fail_fast", "max_workers", "llm_max_workers", "chart_only", "enable_quality_gates")},
                     "document_graph_summary": document_graph.summary(),
                     "normalization_report": normalization_report,
@@ -169,6 +177,7 @@ class ContentGraphPipelineRunner:
                     panel_fact_rows=panel_fact_rows,
                     image_observations=image_observations,
                     options=options,
+                    run_metadata=run_metadata,
                 )
                 if isinstance(audit, LiveAuditTrace):
                     output_paths["audit_events_jsonl"] = str(audit.path)
@@ -188,14 +197,23 @@ class ContentGraphPipelineRunner:
                 audit_trace=audit,
                 errors=all_errors,
                 status=status,
+                run_metadata=run_metadata,
             )
         except ExtractionPipelineError as exc:
             entry = {"exception_type": type(exc).__name__, "message": str(exc)}
             audit.append(entry)
             all_errors.append(entry)
+            if output_dir:
+                _write_failure_audit(
+                    output_dir=output_dir,
+                    run_metadata=run_metadata,
+                    audit_trace=audit,
+                    errors=all_errors,
+                    options=options,
+                )
             if options and not options.fail_fast:
-                return ExtractionRunResult(document_graph_summary={}, figure_panel_graph={}, audit_trace=audit, errors=all_errors, status="partial_failure")
-            return ExtractionRunResult(document_graph_summary={}, figure_panel_graph={}, audit_trace=audit, errors=all_errors, status="failed")
+                return ExtractionRunResult(document_graph_summary={}, figure_panel_graph={}, audit_trace=audit, errors=all_errors, status="partial_failure", run_metadata=run_metadata)
+            return ExtractionRunResult(document_graph_summary={}, figure_panel_graph={}, audit_trace=audit, errors=all_errors, status="failed", run_metadata=run_metadata)
 
     def _classify_panels(
         self,
@@ -410,6 +428,38 @@ class ContentGraphPipelineRunner:
 
 def run_content_graph_pipeline(**kwargs) -> ExtractionRunResult:
     return ContentGraphPipelineRunner().run(**kwargs)
+
+
+def _write_failure_audit(
+    *,
+    output_dir: str,
+    run_metadata: dict[str, str],
+    audit_trace: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+    options: ExtractionPipelineOptions,
+) -> None:
+    try:
+        AuditExporter().write_outputs(
+            output_dir=output_dir,
+            audit_payload={
+                "schema_version": AUDIT_SCHEMA_VERSION,
+                "run_metadata": run_metadata,
+                "status": "failed",
+                "audit_trace": audit_trace,
+                "errors": errors,
+            },
+            panel_fact_rows=[],
+            options=options,
+            run_metadata=run_metadata,
+        )
+    except Exception as exc:  # pragma: no cover - only exercised on output failure
+        export_error = {
+            "event": "failure_audit_write_failed",
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
+        }
+        audit_trace.append(export_error)
+        errors.append(export_error)
 
 
 class LiveAuditTrace(list[dict[str, Any]]):

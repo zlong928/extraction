@@ -18,7 +18,29 @@ _LOCK_DIR_CREATED = False
 
 @contextmanager
 def chart_only_run_lock(paper_id: int, *, blocking: bool = True):
-    from app.config import DATA_DIR
+    from sqlalchemy import text
+
+    from app.config import DATA_DIR, DATABASE_URL
+    from app.db import engine
+
+    if DATABASE_URL.startswith("postgresql"):
+        lock_key = 900_000_000 + int(paper_id)
+        with engine.connect() as connection:
+            if blocking:
+                connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": lock_key})
+            else:
+                acquired = bool(
+                    connection.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_key}).scalar_one()
+                )
+                if not acquired:
+                    raise ChartOnlyRunAlreadyActive(
+                        f"chart-only extraction already running for paper {paper_id}"
+                    )
+            try:
+                yield
+            finally:
+                connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
+        return
 
     global _LOCK_DIR_CREATED
     lock_dir = DATA_DIR / "runtime" / "content_pipeline_locks"
